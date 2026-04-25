@@ -1,8 +1,10 @@
 # Volteux
 
-AI-powered Arduino starter kit web tool for absolute beginners. Beginner types a project description in plain English; AI generates an interactive 3D component view (clickable, click-to-learn), a 2D breadboard wiring view, an Arduino C++ sketch, and a pre-filled Adafruit cart. One-click WebUSB flash to a real Uno.
+AI-powered Arduino starter kit web tool for absolute beginners. Beginner types a project description in plain English; AI generates an interactive 3D component view (clickable, click-to-learn), a 2D breadboard wiring view, an Arduino C++ sketch, and a pre-filled Adafruit cart. One-click browser-direct flash to a real Uno.
 
-**v0 scope:** archetype 1 only — Uno + HC-SR04 ultrasonic sensor + micro-servo. 5 components in the 3D library. ~10 rules. Full eval harness with Wokwi headless behavior simulation. Meta-harness loop (agentic prompt-improvement). Server-side shareable-link service. WebUSB-only flashing across all boards (no `.hex` download fallback). Cross-platform validation on 3+ host platforms. v0 ships ~10-12 weeks.
+> **2026-04-25 update — flash API language:** "WebUSB" appears throughout this doc and `docs/PLAN.md` by historical convention. Subsequent investigation (see [docs/plans/2026-04-25-001-feat-v01-pipeline-archetype-1-plan.md](./docs/plans/2026-04-25-001-feat-v01-pipeline-archetype-1-plan.md) Unit 2) found that `avrgirl-arduino` is Node-first with alpha-stage **Web Serial** (not WebUSB) browser support. The Day 1-2 spike resolves the actual library + Web API path. Treat "WebUSB" in this doc as "browser-direct flash (likely Web Serial)" until the spike confirms otherwise. Once it does, this doc and `docs/PLAN.md` need a coordinated edit (joint signoff per Schema discipline cadence).
+
+**v0 scope:** archetype 1 only — Uno + HC-SR04 ultrasonic sensor + micro-servo. 5 components in the 3D library. ~10 rules. Full eval harness with Wokwi headless behavior simulation. Meta-harness loop (agentic prompt-improvement). Server-side shareable-link service. Browser-direct flashing only across all boards — no `.hex` download fallback (the underlying Web API is Web Serial / WebUSB / File System Access depending on board). Cross-platform validation on 3+ host platforms. v0 ships ~10-12 weeks.
 
 **Source of truth:** [docs/PLAN.md](./docs/PLAN.md). Read this first if you're new.
 
@@ -36,7 +38,7 @@ The JSON contract at `schemas/document.schema.json` is the single integration po
 | LLM | Anthropic SDK | Sonnet for generation, Haiku for classification |
 | Compile | `arduino-cli` on a small VPS (Hetzner CX21 / Fly.io shared-cpu-2x, 4GB RAM minimum) | not Cloudflare Workers — they can't host the toolchain |
 | Behavior eval | Wokwi headless (`wokwi-cli`) | runs the sketch in simulation, asserts state changes |
-| WebUSB flash (Uno) | `avrgirl-arduino` | day-1 spike confirms or this becomes the v0 blocker |
+| Browser-direct Uno flash | `avrgirl-arduino` (candidate; see flash API note above) | Day 1-2 spike confirms library + Web API or this becomes the v0 blocker |
 | Persistence | URL hash (base64+gzip) + localStorage (small) + server-side share service (large) | Stateless v0; sign-in is v1.5 |
 
 ## Development cadence
@@ -55,7 +57,7 @@ The JSON contract at `schemas/document.schema.json` is the single integration po
 
 ## Critical risk to track
 
-**The avrgirl-arduino WebUSB Uno spike is the v0 go/no-go.** End of week 1, on real hardware, on at least one of your dev machines. If it doesn't work and the alternative libraries don't either, this is a real blocker — re-plan that day. There is no `.hex` download fallback in v0.
+**The browser-direct Uno flash spike is the v0 go/no-go.** End of week 1, on real hardware, on at least 3 host platforms. The spike resolves both the library (`avrgirl-arduino` candidate, alternatives in plan Unit 2) and the Web API (likely Web Serial, possibly WebUSB). If neither works, this is a real blocker — re-plan that day. There is no `.hex` download fallback in v0.
 
 ## Open decisions
 
@@ -87,7 +89,7 @@ When a request matches an available skill, invoke it via the Skill tool BEFORE a
 - **Zod is law.** Every external boundary (LLM output, compile API, share API, file imports) parses through Zod. Never trust a string.
 - **`components/registry.ts` is the only place static component metadata is written.** Anywhere else that names a component is consuming, never authoritative.
 - **No silent failures.** Every error path either surfaces through the generic error boundary (with `mailto:` recovery) or through Honest Gap. We don't `console.error` and shrug.
-- **No `.hex` download fallback paths.** WebUSB-only is committed.
+- **No `.hex` download fallback paths.** Browser-direct flash only is committed.
 - **One-line PR description rule:** if you can't describe the diff in one sentence, the PR is too big. Split it.
 
 ## Out of scope (v0)

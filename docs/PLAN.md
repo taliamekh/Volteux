@@ -56,9 +56,11 @@ If a user says "I already have an Uno" but their request maps to archetype 2 or 
 
 ## Flash Mechanism per Board
 
+> **2026-04-25 update — flash API for Uno:** "WebUSB + avrgirl-arduino" below is historical convention. Subsequent investigation (see [docs/plans/2026-04-25-001-feat-v01-pipeline-archetype-1-plan.md](./plans/2026-04-25-001-feat-v01-pipeline-archetype-1-plan.md) Unit 2) found `avrgirl-arduino` is Node-first with alpha-stage **Web Serial** (not WebUSB) browser support. The previously-named fallbacks `arduino-stk500-v1` and `chrome-arduino-fu` do NOT exist on npm — they were generic-memory placeholders. Treat the Uno row as "browser-direct flash, library + Web API to be confirmed by Day 1-2 spike on real hardware." Day 1-2 spike candidates: `avrgirl-arduino` with Web Serial, a forked avrgirl with custom Web Serial transport, or `stk500-v1`/`stk500-v2` (Node-only) wrapped behind a Web Serial driver. Once the spike confirms the real path, this section needs a coordinated edit (joint signoff).
+
 | Board | Mechanism | UX |
 |---|---|---|
-| Uno | **WebUSB + `avrgirl-arduino`** — opens a serial port to the Uno's USB-to-UART bridge, runs the STK500v1 protocol, writes the binary directly. **Day 1 spike**: pipeline person proves a `.hex` flashes onto a real Uno in the browser before week 1 ends. If avrgirl-arduino doesn't work, evaluate alternatives in `arduino-stk500-v1`, `chrome-arduino-fu` forks; if none work, this becomes a real v0 blocker and we re-plan. No `.hex` download fallback in v0 — committed. |
+| Uno | **Browser-direct flash, ~~WebUSB + `avrgirl-arduino`~~ (see callout above; spike resolves library + Web API)** — opens a serial port to the Uno's USB-to-UART bridge, runs the STK500v1 protocol, writes the binary directly. **Day 1-2 spike**: pipeline person proves a `.hex` (both blink AND a Servo-using sketch) flashes onto a real Uno in the browser before EOD Day 2 on Kai's primary Mac, then cross-platform validation through end of week 1. If no candidate library works, this becomes a real v0 blocker and we re-plan. No `.hex` download fallback in v0 — committed. |
 | ESP32-WROOM | ESP Web Tools (one click; built on WebUSB via esptool.js). v1.5. |
 | ESP32-C3 | ESP Web Tools (one click; built on WebUSB via esptool.js). v1.5. |
 | Pi Pico | File System Access API → write `.uf2` to user-selected `RPI-RP2` drive after BOOTSEL. One picker dialog per BOOTSEL cycle. v1.5. |
