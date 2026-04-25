@@ -29,7 +29,7 @@ const fixture: VolteuxProjectDocument = VolteuxProjectDocumentSchema.parse(
 
 /** Deep-clone the fixture so each test gets a fresh, mutable copy. */
 function clone(): VolteuxProjectDocument {
-  return JSON.parse(JSON.stringify(fixture)) as VolteuxProjectDocument;
+  return structuredClone(fixture);
 }
 
 describe("runCrossConsistencyGate — happy path", () => {
@@ -94,6 +94,24 @@ describe("Check (c) — connection pin labels exist", () => {
     expect(
       checkConnectionPinLabelsExist(doc, DEFAULT_REGISTRY).ok,
     ).toBe(true);
+  });
+
+  test("rejects a connection that references a wire/breadboard component (review ADV-004)", () => {
+    const doc = clone();
+    // Add a connection routed through the jumper-wire bundle (w1, sku 758,
+    // type 'wire' — empty pin_metadata). Previously this slipped through
+    // because empty pin_metadata triggered a `continue`; now it must fail.
+    doc.connections.push({
+      from: { component_id: "u1", pin_label: "5V" },
+      to: { component_id: "w1", pin_label: "in" },
+      purpose: "test wire-as-node rejection",
+    });
+    const result = checkConnectionPinLabelsExist(doc, DEFAULT_REGISTRY);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("w1");
+      expect(result.message).toContain("inventory");
+    }
   });
 });
 

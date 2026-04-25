@@ -15,14 +15,17 @@
  * See schemas/CHANGELOG.md v0.1 entry.
  */
 
-import type { VolteuxProjectDocument } from "../../../schemas/document.zod.ts";
+import type {
+  VolteuxExternalSetup,
+  VolteuxProjectDocument,
+} from "../../../schemas/document.zod.ts";
 import type { Rule, RuleResult } from "../../types.ts";
 
-const V15_FIELDS = [
+const V15_FIELDS: ReadonlyArray<keyof VolteuxExternalSetup> = [
   "captive_portal_ssid",
   "aio_feed_names",
   "mdns_name",
-] as const;
+];
 
 export const noV15FieldsOnArchetype1Rule: Rule<VolteuxProjectDocument> = {
   id: "no-v15-fields-on-archetype-1",
@@ -33,12 +36,11 @@ export const noV15FieldsOnArchetype1Rule: Rule<VolteuxProjectDocument> = {
     if (doc.archetype_id !== "uno-ultrasonic-servo") return { passed: true };
 
     const present: string[] = [];
-    const ext = doc.external_setup as Record<string, unknown>;
     for (const field of V15_FIELDS) {
-      const value = ext[field];
+      const value = doc.external_setup[field];
       if (value === undefined) continue;
       if (Array.isArray(value) && value.length === 0) continue;
-      if (value === "" || value === null) continue;
+      if (value === "") continue;
       present.push(field);
     }
 

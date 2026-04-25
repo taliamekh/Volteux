@@ -70,7 +70,7 @@ describe("ADDITIONAL_FILE_NAME_REGEX", () => {
     "",
     "../etc/passwd",
     "/etc/passwd",
-    "sketch .ino", // null byte
+    "sketch\0.ino", // actual null byte (was previously a misleading ASCII space)
     "sub/file.ino",
     "sub\\file.ino",
     "sketch", // no extension
@@ -112,6 +112,122 @@ describe("runAllowlistChecks — happy path", () => {
       main_ino: "// #include <WiFi.h>\n#include <Servo.h>",
     };
     expect(runAllowlistChecks(input)).toEqual([]);
+  });
+});
+
+describe("Phase 2 line-continuation splicing (security: SEC-001)", () => {
+  test("'#include \\\\\\n<WiFi.h>' is caught as a forbidden library, not silently ignored", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino: "#include \\\n<WiFi.h>\n",
+    };
+    const violations = runAllowlistChecks(input);
+    expect(
+      violations.some(
+        (v) => v.kind === "library-not-in-allowlist" && v.library === "WiFi",
+      ),
+    ).toBe(true);
+  });
+
+  test("multi-segment line continuation '#in\\\\\\nclude <WiFi.h>' is also caught", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino: "#in\\\nclude <WiFi.h>\n",
+    };
+    const violations = runAllowlistChecks(input);
+    expect(
+      violations.some(
+        (v) => v.kind === "library-not-in-allowlist" && v.library === "WiFi",
+      ),
+    ).toBe(true);
+  });
+
+  test("CRLF line continuation '\\\\\\r\\n' also splices", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino: "#include \\\r\n<WiFi.h>\n",
+    };
+    const violations = runAllowlistChecks(input);
+    expect(
+      violations.some(
+        (v) => v.kind === "library-not-in-allowlist" && v.library === "WiFi",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("String-literal stripping (correctness: ADV-001)", () => {
+  test("#include text inside a C string literal does NOT trigger a violation", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino:
+        '#include <Servo.h>\nconst char msg[] = "Error: #include <WiFi.h> not supported";\n',
+    };
+    expect(runAllowlistChecks(input)).toEqual([]);
+  });
+
+  test("#include text inside a char literal does NOT trigger (single-quoted)", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino:
+        "#include <Servo.h>\nchar c = '<';\nchar d = '>';\n", // tokens that could confuse a naive parser
+    };
+    expect(runAllowlistChecks(input)).toEqual([]);
+  });
+
+  test("escaped quote inside a string does not break literal stripping", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino:
+        '#include <Servo.h>\nconst char* s = "He said \\"#include <WiFi.h>\\" loudly";\n',
+    };
+    expect(runAllowlistChecks(input)).toEqual([]);
+  });
+
+  test("real #include AFTER a string with bracketed text is still detected", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino:
+        'const char msg[] = "<example>";\n#include <WiFi.h>\n',
+    };
+    const violations = runAllowlistChecks(input);
+    expect(
+      violations.some(
+        (v) => v.kind === "library-not-in-allowlist" && v.library === "WiFi",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("libraries[] vs #include cross-check (T-001 — plan-required)", () => {
+  test("'#include <Servo.h>' with libraries: [] fails with include-without-libraries-declaration", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      libraries: [],
+    };
+    const violations = runAllowlistChecks(input);
+    const violation = violations.find(
+      (v) => v.kind === "include-without-libraries-declaration",
+    );
+    expect(violation).toBeDefined();
+    if (violation && violation.kind === "include-without-libraries-declaration") {
+      expect(violation.header).toBe("Servo.h");
+      expect(violation.library).toBe("Servo");
+      expect(violation.file).toBe("main_ino");
+    }
+  });
+
+  test("Arduino-core built-in includes (Wire.h) do NOT trigger the cross-check", () => {
+    const input: AllowlistInput = {
+      ...baseInput,
+      main_ino: "#include <Servo.h>\n#include <Wire.h>\n",
+      libraries: ["Servo"], // Wire is built-in; doesn't need declaration
+    };
+    expect(runAllowlistChecks(input)).toEqual([]);
+  });
+
+  test("declared Servo with #include <Servo.h> passes (the canonical case)", () => {
+    expect(runAllowlistChecks(baseInput)).toEqual([]);
   });
 });
 

@@ -29,7 +29,7 @@ const fixture: VolteuxProjectDocument = VolteuxProjectDocumentSchema.parse(
 );
 
 function clone(): VolteuxProjectDocument {
-  return JSON.parse(JSON.stringify(fixture)) as VolteuxProjectDocument;
+  return structuredClone(fixture);
 }
 
 function ruleById(id: string) {
@@ -170,6 +170,31 @@ describe("no-floating-pins", () => {
       expect(result.severity).toBe("red");
       expect(result.message).toContain("Trig");
     }
+  });
+
+  test("fails when sensor's GND pin is removed (review ADV-005/COR-004)", () => {
+    const doc = clone();
+    doc.connections = doc.connections.filter(
+      (c) =>
+        !(c.from.component_id === "s1" && c.from.pin_label === "GND") &&
+        !(c.to.component_id === "s1" && c.to.pin_label === "GND"),
+    );
+    const result = rule.check(doc);
+    expect(result.passed).toBe(false);
+    if (!result.passed) {
+      expect(result.severity).toBe("red");
+      expect(result.message).toContain("GND");
+    }
+  });
+
+  test("fails when servo's GND pin is removed", () => {
+    const doc = clone();
+    doc.connections = doc.connections.filter(
+      (c) =>
+        !(c.from.component_id === "a1" && c.from.pin_label === "GND") &&
+        !(c.to.component_id === "a1" && c.to.pin_label === "GND"),
+    );
+    expect(rule.check(doc).passed).toBe(false);
   });
 });
 
@@ -324,6 +349,34 @@ describe("sketch-references-pins", () => {
     const result = rule.check(doc);
     expect(result.passed).toBe(false);
     if (!result.passed) expect(result.message).toContain("9");
+  });
+
+  test("pin reference in a comment does NOT count as a real reference (review ADV-002)", () => {
+    const doc = clone();
+    // Wiring still says servo Signal -> Uno pin 9, but the sketch only
+    // mentions pin 9 in a stale comment. The actual code drives pin 7.
+    doc.sketch.main_ino =
+      "// Old wiring: servo was on pin 9\n" +
+      "#include <Servo.h>\nServo s;\n" +
+      "void setup() {\n" +
+      "  pinMode(7, OUTPUT); pinMode(8, INPUT);\n" +
+      "  s.attach(7);\n" +
+      "}\nvoid loop() { s.write(90); }\n";
+    const result = rule.check(doc);
+    expect(result.passed).toBe(false);
+    if (!result.passed) {
+      expect(result.severity).toBe("red");
+      expect(result.message).toContain("9");
+    }
+  });
+
+  test("pin reference in a block comment also does NOT count", () => {
+    const doc = clone();
+    doc.sketch.main_ino =
+      "/* TODO: maybe move to pin 9 later */\n" +
+      "void setup() { pinMode(7, OUTPUT); pinMode(8, INPUT); }\n" +
+      "void loop() {}\n";
+    expect(rule.check(doc).passed).toBe(false);
   });
 });
 

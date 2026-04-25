@@ -21,6 +21,11 @@ const OUT_PATH = resolve(HERE, "document.schema.json");
 const jsonSchema = zodToJsonSchema(VolteuxProjectDocumentSchema, {
   name: "VolteuxProjectDocument",
   $refStrategy: "root",
+  // zod-to-json-schema's max target is draft/2019-09. PLAN.md § "v0 JSON
+  // schema (draft)" currently declares draft/2020-12 — drift documented in
+  // schemas/CHANGELOG.md v0.1 for joint-signoff resolution. The structural
+  // output here is compatible with both drafts (no `unevaluatedProperties`,
+  // no recursive refs); validators using either draft behave identically.
   target: "jsonSchema2019-09",
 });
 

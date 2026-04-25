@@ -65,7 +65,6 @@ const HEADER_TO_LIBRARY: Readonly<Record<string, string>> = {
   "Encoder.h": "Encoder",
   "Adafruit_MQTT.h": "Adafruit_MQTT_Library",
   "Adafruit_MQTT_Client.h": "Adafruit_MQTT_Library",
-  DHT: "DHT_sensor_library",
   "DHT.h": "DHT_sensor_library",
   "Adafruit_NeoPixel.h": "Adafruit_NeoPixel",
 
@@ -89,11 +88,25 @@ const HEADER_TO_LIBRARY: Readonly<Record<string, string>> = {
 export const ADDITIONAL_FILE_NAME_REGEX = /^[A-Za-z0-9_.-]+\.(ino|h|cpp|c)$/;
 
 /**
+ * C preprocessor Phase 2: splice logical source lines by deleting every
+ * backslash-newline pair. The compiler does this BEFORE Phase 3 (tokenization
+ * and comment stripping), so `#include \⏎<WiFi.h>` is a valid include
+ * directive. Without this splice, the include parser regex wouldn't see the
+ * directive and the allowlist could be silently bypassed.
+ *
+ * Splice deletes the backslash and the newline outright (matches the C
+ * preprocessor exactly). Character offsets shrink — that's fine; downstream
+ * uses are not line-number-sensitive in v0.1.
+ */
+function spliceLineContinuations(source: string): string {
+  return source.replace(/\\\r?\n/g, "");
+}
+
+/**
  * Strip C/C++ line and block comments from source, replacing them with
- * spaces so character offsets are preserved (for any future line-number
- * reporting). Does NOT handle escaped quotes inside strings — but for the
- * narrow purpose of "did the LLM #include a forbidden library, even in a
- * commented-out line", false-positive avoidance is what matters.
+ * spaces so character offsets are preserved (helps any future line-number
+ * reporting). False-positive `#include` matches inside string literals
+ * are handled separately by `parseIncludes` via a line-start anchor.
  */
 export function stripComments(source: string): string {
   let result = source;
@@ -110,14 +123,24 @@ export function stripComments(source: string): string {
 
 /**
  * Extract every `#include <header>` or `#include "header"` from a single
- * source string. Comment-stripped before scanning so commented-out includes
- * don't trip the allowlist.
+ * source string. Pipeline:
+ *   1. Splice line continuations (C preprocessor Phase 2 — security: SEC-001)
+ *   2. Strip block + line comments (so commented-out includes don't match)
+ *   3. Match `#include` ONLY at line start (after optional whitespace).
+ *      C preprocessor directives must begin a logical line, so `#include`
+ *      appearing inside a string literal — which always sits after some
+ *      `=`/`(`/etc. on the same logical line — is naturally excluded by
+ *      this anchor. C strings cannot contain a literal newline (only the
+ *      `\n` escape sequence), so the line-start anchor is sufficient
+ *      protection against false-positive matches inside string constants.
  *
  * Returns an array of header names (e.g., `["Servo.h", "Wire.h"]`).
  */
 export function parseIncludes(source: string): ReadonlyArray<string> {
-  const stripped = stripComments(source);
-  const re = /#\s*include\s*[<"]([^>"\s]+)[>"]/g;
+  const spliced = spliceLineContinuations(source);
+  const stripped = stripComments(spliced);
+  // `m` flag: ^ matches start of each line; `gm` walks every directive.
+  const re = /^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\s]+)[>"]/gm;
   const headers: string[] = [];
   for (const match of stripped.matchAll(re)) {
     if (match[1]) headers.push(match[1]);
@@ -150,6 +173,12 @@ export type AllowlistViolation =
   | {
       kind: "unknown-header";
       header: string;
+      file: string;
+    }
+  | {
+      kind: "include-without-libraries-declaration";
+      header: string;
+      library: string;
       file: string;
     };
 
@@ -208,6 +237,8 @@ export function runAllowlistChecks(
       .map(([name, source]) => ({ name, source })),
   ];
 
+  const declaredLibraries = new Set(input.libraries);
+
   for (const file of filesToScan) {
     for (const header of parseIncludes(file.source)) {
       const library = headerToLibrary(header);
@@ -226,6 +257,19 @@ export function runAllowlistChecks(
           kind: "library-not-in-allowlist",
           library,
           source: `include:${file.name}`,
+        });
+        continue;
+      }
+      // Library is in the per-archetype allowlist, but the LLM also has to
+      // declare it in libraries[] explicitly. arduino-cli would auto-resolve
+      // the include even with libraries: [], but the document's libraries[]
+      // field becomes misleading and the v0.5 eval harness will key on it.
+      if (!declaredLibraries.has(library)) {
+        violations.push({
+          kind: "include-without-libraries-declaration",
+          header,
+          library,
+          file: file.name,
         });
       }
     }

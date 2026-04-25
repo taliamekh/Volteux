@@ -14,6 +14,27 @@ requires both signatures on the commit + a new entry here. No exceptions for
 
 **Signatures:** Kai (Track 2) — Talia signoff PENDING (joint Day 1 session)
 
+### 2026-04-25 — late-day tightenings (within v0.1 lock; review-driven)
+
+Two strict-narrowing changes from the post-Unit-5 review pass. Both are
+strict subsets of what the original v0.1 schema permitted — every fixture
+that parsed before still parses. No type signature changes for downstream
+consumers. **Talia signoff covers these together with the original v0.1
+lock at the joint Day 1 session.**
+
+- **`anchor_hole` regex tightened** from `/^[a-j][0-9]{1,2}$/` (allowed
+  columns 0–99) to `/^[a-j]([1-9]|[12][0-9]|30)$/` (columns 1–30 only).
+  Closes review findings COR-001 + ADV-008. The 830-tie breadboard physically
+  has columns 1–30; the previous regex accepted off-grid coordinates that
+  the UI renderer would have to silently coerce or render off-canvas.
+- **Generated JSON Schema target documented as draft/2019-09.** PLAN.md
+  § "v0 JSON schema (draft)" currently declares draft/2020-12, but
+  `zod-to-json-schema` (the generator) only emits up to draft/2019-09. The
+  structural output is compatible with both drafts (no `unevaluatedProperties`,
+  no recursive refs); validators using either draft behave identically. The
+  PLAN.md drift is documented as a JOINT-SIGNOFF resolution item — pick one
+  draft consistently. (Closes review finding AC-002.)
+
 Initial schema lock for the v0 demo (archetype 1 only — Uno + HC-SR04 + servo).
 Ports `docs/PLAN.md` § "v0 JSON schema (draft)" into Zod as the single source
 of truth.

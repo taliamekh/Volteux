@@ -140,7 +140,7 @@
                   },
                   "anchor_hole": {
                     "type": "string",
-                    "pattern": "^[a-j][0-9]{1,2}$"
+                    "pattern": "^[a-j]([1-9]|[12][0-9]|30)$"
                   },
                   "rotation": {
                     "type": "number",

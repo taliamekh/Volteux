@@ -23,7 +23,18 @@ describe("VolteuxProjectDocumentSchema — canonical fixture", () => {
     expect(result.data.archetype_id).toBe("uno-ultrasonic-servo");
   });
 
-  test("fixture stripped of optional v1.5 field still parses", () => {
+  test("fixture stripped of optional v1.5 field captive_portal_ssid still parses", () => {
+    // captive_portal_ssid was never in the canonical fixture; verify the
+    // schema accepts a fixture both with and without it.
+    const stripped = structuredClone(fixture) as Record<string, unknown>;
+    const ext = stripped.external_setup as Record<string, unknown>;
+    delete ext.captive_portal_ssid;
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(stripped).success,
+    ).toBe(true);
+  });
+
+  test("fixture without optional needs_aio_credentials still parses", () => {
     const stripped = structuredClone(fixture) as Record<string, unknown>;
     const ext = stripped.external_setup as Record<string, unknown>;
     delete ext.needs_aio_credentials;
@@ -68,6 +79,68 @@ describe("VolteuxProjectDocumentSchema — strictness", () => {
       const path = result.error.issues[0]?.path ?? [];
       expect(path).toEqual(["board", "fqbn"]);
     }
+  });
+});
+
+describe("anchor_hole — column range (review COR-001 + ADV-008)", () => {
+  test("column 0 is rejected (no real breadboard has column 0)", () => {
+    const mutated = structuredClone(fixture) as Record<string, unknown>;
+    const layout = mutated.breadboard_layout as Record<string, unknown>;
+    const components = layout.components as Array<Record<string, unknown>>;
+    components[0]!.anchor_hole = "e0";
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(mutated).success,
+    ).toBe(false);
+  });
+
+  test("column 31 is rejected (off the 30-column breadboard)", () => {
+    const mutated = structuredClone(fixture) as Record<string, unknown>;
+    const layout = mutated.breadboard_layout as Record<string, unknown>;
+    const components = layout.components as Array<Record<string, unknown>>;
+    components[0]!.anchor_hole = "e31";
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(mutated).success,
+    ).toBe(false);
+  });
+
+  test("column 99 is rejected (the old `[0-9]{1,2}` regex would have allowed this)", () => {
+    const mutated = structuredClone(fixture) as Record<string, unknown>;
+    const layout = mutated.breadboard_layout as Record<string, unknown>;
+    const components = layout.components as Array<Record<string, unknown>>;
+    components[0]!.anchor_hole = "e99";
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(mutated).success,
+    ).toBe(false);
+  });
+
+  test("column 30 is accepted (boundary)", () => {
+    const mutated = structuredClone(fixture) as Record<string, unknown>;
+    const layout = mutated.breadboard_layout as Record<string, unknown>;
+    const components = layout.components as Array<Record<string, unknown>>;
+    components[0]!.anchor_hole = "j30";
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(mutated).success,
+    ).toBe(true);
+  });
+
+  test("column 1 is accepted (boundary)", () => {
+    const mutated = structuredClone(fixture) as Record<string, unknown>;
+    const layout = mutated.breadboard_layout as Record<string, unknown>;
+    const components = layout.components as Array<Record<string, unknown>>;
+    components[0]!.anchor_hole = "a1";
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(mutated).success,
+    ).toBe(true);
+  });
+
+  test("row outside a-j is rejected", () => {
+    const mutated = structuredClone(fixture) as Record<string, unknown>;
+    const layout = mutated.breadboard_layout as Record<string, unknown>;
+    const components = layout.components as Array<Record<string, unknown>>;
+    components[0]!.anchor_hole = "k15";
+    expect(
+      VolteuxProjectDocumentSchema.safeParse(mutated).success,
+    ).toBe(false);
   });
 });
 

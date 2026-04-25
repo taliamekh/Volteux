@@ -21,7 +21,14 @@ const TYPES_TO_CHECK: ReadonlyArray<ComponentType> = [
   "display",
 ];
 
-const SKIPPABLE_DIRECTIONS = new Set(["passive", "ground"]); // ground is fine to skip; ungrounded sensors are caught by other rules
+/**
+ * Pin directions whose absence in connections[] is acceptable. `passive` pins
+ * (e.g., decorative or NC pins) genuinely don't need wiring. `ground` was
+ * previously also skipped, but that left ungrounded sensors passing all
+ * checks (review finding ADV-005 / COR-004) — a CMOS input with no ground
+ * reference floats nondeterministically. `ground` is now REQUIRED.
+ */
+const SKIPPABLE_DIRECTIONS = new Set(["passive"]);
 
 export const noFloatingPinsRule: Rule<VolteuxProjectDocument> = {
   id: "no-floating-pins",

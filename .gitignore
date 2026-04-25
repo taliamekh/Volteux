@@ -31,3 +31,6 @@ Thumbs.db
 
 # Claude Code session artifacts (already gitignored at parent .claude/, but explicit)
 .claude/scheduled_tasks.lock
+
+# Compound-engineering review/run artifacts (per-run scratch directory)
+.context/

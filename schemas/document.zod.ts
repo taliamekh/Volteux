@@ -88,12 +88,18 @@ const ConnectionSchema = z
 const BreadboardComponentSchema = z
   .object({
     component_id: z.string().min(1),
-    /** Breadboard hole using row/column convention: a-e upper, f-j lower, columns 1-30. */
+    /**
+     * Breadboard hole using row/column convention: a-e upper half, f-j lower
+     * half, columns 1-30 (the canonical archetype-1 breadboard is the 830-tie
+     * SKU 239). Column 0 does not exist on a real breadboard; columns 31+
+     * are off the board. Tightened in v0.1 from `[0-9]{1,2}` per review
+     * findings COR-001 + ADV-008.
+     */
     anchor_hole: z
       .string()
       .regex(
-        /^[a-j][0-9]{1,2}$/,
-        "anchor_hole must match /^[a-j][0-9]{1,2}$/ (e.g., 'e15')",
+        /^[a-j]([1-9]|[12][0-9]|30)$/,
+        "anchor_hole must match /^[a-j]([1-9]|[12][0-9]|30)$/ — rows a-j, columns 1-30 (e.g., 'e15')",
       ),
     /** Rotation applied to the component's footprint at the anchor_hole. */
     rotation: z.union([

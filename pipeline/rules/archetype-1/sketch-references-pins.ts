@@ -17,6 +17,7 @@
 import type { VolteuxProjectDocument } from "../../../schemas/document.zod.ts";
 import type { Rule, RuleResult } from "../../types.ts";
 import { lookupBySku } from "../../../components/registry.ts";
+import { stripComments } from "../../gates/library-allowlist.ts";
 
 const POWER_AND_GROUND = new Set(["GND", "GND2", "5V", "3.3V"]);
 
@@ -44,13 +45,17 @@ export const sketchReferencesPinsRule: Rule<VolteuxProjectDocument> = {
       }
     }
 
-    // Sketch must contain each referenced pin as a token. We use word-
-    // boundary regex to avoid false positives (e.g., pin "9" matching
+    // Sketch must contain each referenced pin as a token in EXECUTABLE code,
+    // not in a comment. Strip C/C++ comments first (review finding ADV-002:
+    // a leftover '// servo was on pin 9' comment otherwise made the rule
+    // pass even when the actual sketch used a different pin). Word-boundary
+    // regex still in use to avoid false positives (e.g., pin "9" matching
     // "39" or "9000").
+    const sketchExecutable = stripComments(doc.sketch.main_ino);
     const missing: string[] = [];
     for (const pin of referencedPins) {
       const re = new RegExp(`\\b${pin}\\b`);
-      if (!re.test(doc.sketch.main_ino)) {
+      if (!re.test(sketchExecutable)) {
         missing.push(pin);
       }
     }

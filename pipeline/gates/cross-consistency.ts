@@ -30,8 +30,12 @@ import {
   type ComponentRegistryEntry,
   type ComponentType,
 } from "../../components/registry.ts";
+import type { VolteuxArchetypeId } from "../../schemas/document.zod.ts";
 import type { GateResult } from "../types.ts";
-import { runAllowlistChecks } from "./library-allowlist.ts";
+import {
+  runAllowlistChecks,
+  type AllowlistViolation,
+} from "./library-allowlist.ts";
 
 /**
  * Canonical FQBN per board type. Used by check (f). The schema validates
@@ -51,10 +55,13 @@ const TYPES_REQUIRING_LAYOUT_SET: ReadonlySet<ComponentType> = new Set(
   TYPES_REQUIRING_LAYOUT,
 );
 
+/** Stable per-check identifier matching origin doc § Definitions. */
+type CheckId = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h";
+
 /** Single-check result — used internally by the gate. */
 type CheckResult =
-  | { ok: true; check: string }
-  | { ok: false; check: string; message: string };
+  | { ok: true; check: CheckId }
+  | { ok: false; check: CheckId; message: string };
 
 /** Registry shape the gate accepts (reads as a Map of SKU -> entry). */
 export type ComponentRegistry = Readonly<
@@ -118,6 +125,11 @@ export function checkConnectionComponentsExist(
  * (c) Every `pin_label` in a connection exists in the source component's
  * `pin_metadata`. Requires registry lookup (component types are in the
  * registry, not the runtime JSON).
+ *
+ * Wires and the breadboard itself have no `pin_metadata` (they're inventory
+ * items, not network nodes). A connection that references one is rejected —
+ * this also closes review finding ADV-004, where a multi-hop voltage path
+ * routed through a wire component silently bypassed `voltage-match`.
  */
 export function checkConnectionPinLabelsExist(
   doc: VolteuxProjectDocument,
@@ -133,7 +145,12 @@ export function checkConnectionPinLabelsExist(
       const entry = registry[component.sku];
       if (!entry) continue; // (g) catches this
       const validLabels = new Set(entry.pin_metadata.map((p) => p.label));
-      if (validLabels.size === 0) continue; // wires/breadboard have no pins
+      if (validLabels.size === 0) {
+        issues.push(
+          `connection [${conn.from.component_id}.${conn.from.pin_label} -> ${conn.to.component_id}.${conn.to.pin_label}]: ${endpoint.component_id} (sku ${component.sku}, type ${entry.type}) cannot appear in connections — wires and breadboards are inventory, not network nodes`,
+        );
+        continue;
+      }
       if (!validLabels.has(endpoint.pin_label)) {
         issues.push(
           `connection [${conn.from.component_id}.${conn.from.pin_label} -> ${conn.to.component_id}.${conn.to.pin_label}]: ${endpoint.component_id} (sku ${component.sku}) has no pin "${endpoint.pin_label}"`,
@@ -253,12 +270,7 @@ export function checkLibraryAllowlist(
   });
   if (violations.length > 0) {
     const first = violations[0]!;
-    const summary =
-      first.kind === "filename-allowlist"
-        ? `filename "${first.filename}" rejected: ${first.reason}`
-        : first.kind === "library-not-in-allowlist"
-          ? `library "${first.library}" not in archetype "${doc.archetype_id}" allowlist (source: ${first.source})`
-          : `unknown header "${first.header}" in ${first.file}`;
+    const summary = summarizeViolation(first, doc.archetype_id);
     return {
       ok: false,
       check: "h",
@@ -268,6 +280,22 @@ export function checkLibraryAllowlist(
     };
   }
   return { ok: true, check: "h" };
+}
+
+function summarizeViolation(
+  v: AllowlistViolation,
+  archetype: VolteuxArchetypeId,
+): string {
+  switch (v.kind) {
+    case "filename-allowlist":
+      return `filename "${v.filename}" rejected: ${v.reason}`;
+    case "library-not-in-allowlist":
+      return `library "${v.library}" not in archetype "${archetype}" allowlist (source: ${v.source})`;
+    case "unknown-header":
+      return `unknown header "${v.header}" in ${v.file}`;
+    case "include-without-libraries-declaration":
+      return `header "${v.header}" included in ${v.file} but library "${v.library}" missing from sketch.libraries[]`;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -295,7 +323,7 @@ export function runCrossConsistencyGate(
   ];
 
   const failed = results.filter(
-    (r): r is { ok: false; check: string; message: string } => !r.ok,
+    (r): r is { ok: false; check: CheckId; message: string } => !r.ok,
   );
 
   if (failed.length === 0) {
