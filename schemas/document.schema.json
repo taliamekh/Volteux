@@ -1,0 +1,268 @@
+{
+  "$ref": "#/definitions/VolteuxProjectDocument",
+  "definitions": {
+    "VolteuxProjectDocument": {
+      "type": "object",
+      "properties": {
+        "archetype_id": {
+          "type": "string",
+          "enum": [
+            "uno-ultrasonic-servo",
+            "esp32-audio-dashboard",
+            "pico-rotary-oled",
+            "esp32c3-dht-aio",
+            "uno-photoresistor-led"
+          ]
+        },
+        "board": {
+          "type": "object",
+          "properties": {
+            "sku": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "uno",
+                "esp32-wroom",
+                "esp32-c3",
+                "pi-pico"
+              ]
+            },
+            "fqbn": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "sku",
+            "name",
+            "type",
+            "fqbn"
+          ],
+          "additionalProperties": false
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sku": {
+                "type": "string",
+                "minLength": 1
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "id",
+              "sku",
+              "quantity"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "object",
+                "properties": {
+                  "component_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "pin_label": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "component_id",
+                  "pin_label"
+                ],
+                "additionalProperties": false
+              },
+              "to": {
+                "$ref": "#/definitions/VolteuxProjectDocument/properties/connections/items/properties/from"
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1
+              },
+              "wire_color": {
+                "type": "string",
+                "enum": [
+                  "red",
+                  "black",
+                  "yellow",
+                  "blue",
+                  "green",
+                  "white",
+                  "orange"
+                ]
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "purpose"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "breadboard_layout": {
+          "type": "object",
+          "properties": {
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "component_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "anchor_hole": {
+                    "type": "string",
+                    "pattern": "^[a-j][0-9]{1,2}$"
+                  },
+                  "rotation": {
+                    "type": "number",
+                    "enum": [
+                      0,
+                      90,
+                      180,
+                      270
+                    ]
+                  }
+                },
+                "required": [
+                  "component_id",
+                  "anchor_hole",
+                  "rotation"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "components"
+          ],
+          "additionalProperties": false
+        },
+        "sketch": {
+          "type": "object",
+          "properties": {
+            "main_ino": {
+              "type": "string",
+              "minLength": 1
+            },
+            "additional_files": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "libraries": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "main_ino",
+            "libraries"
+          ],
+          "additionalProperties": false
+        },
+        "external_setup": {
+          "type": "object",
+          "properties": {
+            "needs_wifi": {
+              "type": "boolean"
+            },
+            "needs_aio_credentials": {
+              "type": "boolean"
+            },
+            "captive_portal_ssid": {
+              "type": "string",
+              "minLength": 1
+            },
+            "aio_feed_names": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "mdns_name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "honest_gap": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "full",
+                "partial",
+                "out-of-scope"
+              ]
+            },
+            "missing_capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "explanation": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "scope",
+            "missing_capabilities",
+            "explanation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "archetype_id",
+        "board",
+        "components",
+        "connections",
+        "breadboard_layout",
+        "sketch",
+        "external_setup"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2019-09/schema#"
+}
