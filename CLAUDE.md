@@ -8,6 +8,8 @@ AI-powered Arduino starter kit web tool for absolute beginners. Beginner types a
 
 **Source of truth:** [docs/PLAN.md](./docs/PLAN.md). Read this first if you're new.
 
+**Documented solutions:** [`docs/solutions/`](./docs/solutions/) — learnings from past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
+
 ## Track ownership (locked)
 
 | Track | Owner | Surface |
