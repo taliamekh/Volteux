@@ -59,6 +59,7 @@
   ],
   "breadboard_layout": {
     "components": [
+      { "component_id": "u1", "anchor_hole": "a1", "rotation": 0 },
       { "component_id": "s1", "anchor_hole": "e10", "rotation": 0 },
       { "component_id": "a1", "anchor_hole": "e20", "rotation": 0 }
     ]

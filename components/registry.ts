@@ -13,14 +13,30 @@
  * against `COMPONENTS` here.
  */
 
-/** Component category — used by check (e) of the cross-consistency gate. */
+/**
+ * Component category. Used by check (e) of the cross-consistency gate, which
+ * requires components of type `mcu | sensor | actuator | display | passive`
+ * to have a `breadboard_layout.components[]` entry. `wire` and `breadboard`
+ * are excluded — wires are connections, and the breadboard IS the layout
+ * surface (putting it on itself would be nonsense).
+ */
 export type ComponentType =
   | "mcu"
   | "sensor"
   | "actuator"
   | "display"
   | "passive"
-  | "wire";
+  | "wire"
+  | "breadboard";
+
+/** Component types that REQUIRE a breadboard_layout entry (check (e)). */
+export const TYPES_REQUIRING_LAYOUT = [
+  "mcu",
+  "sensor",
+  "actuator",
+  "display",
+  "passive",
+] as const satisfies ReadonlyArray<ComponentType>;
 
 /** Pin direction classification — used by rules (sensor-trig-output-pin etc.). */
 export type PinDirection =
@@ -270,7 +286,7 @@ export const COMPONENTS = {
   "239": {
     sku: "239",
     name: "Full Sized Breadboard (830 tie points)",
-    type: "passive",
+    type: "breadboard",
     education_blurb:
       "A reusable plastic board with hundreds of holes. Push wires and component legs into the holes to make connections without soldering. Two long rails on each side carry power and ground; the middle is split into rows that connect across.",
     model_url: "/models/breadboard-830.glb",
