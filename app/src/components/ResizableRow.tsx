@@ -70,6 +70,12 @@ export default function ResizableRow({
 
   const onPointerDown = (idx: number) => (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    // Multi-touch / multi-pointer guard: dragStateRef is shared across all
+    // dividers in the row, so a second pointer-down (e.g., second finger
+    // landing on an adjacent divider) would clobber the first pointer's
+    // drag state — leaving its body styles set and its capture orphaned.
+    // Bail until the first pointer releases.
+    if (dragStateRef.current !== null) return;
     e.preventDefault();
     const startX = e.clientX;
     const startWeights = weights.slice();
