@@ -67,6 +67,21 @@ export async function createPerRequestSketchDir(
         error: { kind: "filename-allowlist", filename, reason },
       };
     }
+    // ADV-002 — reject any additional_files key that would overwrite the main
+    // sketch. `validateAdditionalFileName` accepts "sketch.ino" (it matches
+    // the regex), so without this guard the second writeFile would clobber
+    // input.main_ino and arduino-cli would compile the wrong content while
+    // the caller silently receives the wrong artifact.
+    if (filename === MAIN_SKETCH_FILE) {
+      return {
+        ok: false,
+        error: {
+          kind: "filename-allowlist",
+          filename,
+          reason: `reserved name: would overwrite the main sketch file (${MAIN_SKETCH_FILE})`,
+        },
+      };
+    }
   }
 
   // Create the per-request directory.
@@ -82,9 +97,13 @@ export async function createPerRequestSketchDir(
 
   let cleaned = false;
   const cleanup = async (): Promise<void> => {
+    // Idempotent guard: skip if a previous call already succeeded.
+    // REL-002 — set the flag AFTER `rm` succeeds, not before. If `rm`
+    // throws (EIO/EROFS), we want subsequent calls to retry deletion
+    // rather than silently no-op with the temp dir still on disk.
     if (cleaned) return;
-    cleaned = true;
     await rm(root, { recursive: true, force: true });
+    cleaned = true;
   };
 
   return { ok: true, handle: { path: sketchDir, cleanup } };

@@ -56,8 +56,13 @@ USER volteux
 WORKDIR /opt/volteux
 
 # Initialise arduino-cli config so subsequent commands write to the user's
-# $HOME instead of trying to write under /root.
-RUN arduino-cli config init --overwrite
+# $HOME instead of trying to write under /root. Also pin the build cache
+# path here (set once, never passed per-invocation) so the runtime compile
+# wrapper doesn't need the deprecated `--build-cache-path` flag — the path
+# survives across requests, giving warm AVR-core caching without the noisy
+# deprecation warning that 1.4.x emits when the flag is on the command line.
+RUN arduino-cli config init --overwrite \
+    && arduino-cli config set build_cache.path /var/cache/arduino-build
 
 # Install the AVR core + Servo library at pinned versions.
 # Then run a canary compile to verify the toolchain works end-to-end at
@@ -76,23 +81,20 @@ RUN arduino-cli core update-index \
     && test -f /opt/volteux/canary-out/canary.ino.hex \
     && rm -rf /opt/volteux/canary /opt/volteux/canary-out
 
-# Copy the source the server needs. Explicit COPY of each subtree (not a
-# blanket `COPY . .`) so the image build doesn't pull node_modules, traces,
-# or the docs/plans directory.
+# Copy manifests + install JS deps FIRST so the bun install layer is
+# cacheable across source edits. Then COPY the source. A change to a rule
+# file or schema must NOT invalidate the dep install.
 #
 # Transitive closure of imports starting from infra/server/compile-api.ts:
 #   infra/server/* -> pipeline/gates/library-allowlist.ts
 #   pipeline/gates/library-allowlist.ts -> schemas/document.zod.ts
 #   schemas/document.zod.ts references types from components/registry.ts
 COPY --chown=volteux:volteux package.json bun.lock tsconfig.json ./
+RUN bun install --frozen-lockfile --production
 COPY --chown=volteux:volteux infra        ./infra
 COPY --chown=volteux:volteux pipeline     ./pipeline
 COPY --chown=volteux:volteux schemas      ./schemas
 COPY --chown=volteux:volteux components   ./components
-
-# Install the JS deps the server needs (Hono, p-limit, @hono/zod-validator,
-# zod). Bun resolves these from package.json.
-RUN bun install --frozen-lockfile --production
 
 EXPOSE 8787
 

@@ -57,10 +57,9 @@ export const voltageMatchRule: Rule<VolteuxProjectDocument> = {
       // non-MCU power_in pins wired together (e.g., HC-SR04.VCC → SG90.VCC)
       // is a silent failure — voltages match but no current flows.
       if (!aIsMcu && !bIsMcu) {
-        const [consumerEnd, supplyEnd] = aIsPower
-          ? [conn.from, conn.to]
-          : [conn.to, conn.from];
-        const [consumer, supply] = aIsPower ? [a, b] : [b, a];
+        const [consumerEnd, supplyEnd, consumer, supply] = aIsPower
+          ? [conn.from, conn.to, a, b]
+          : [conn.to, conn.from, b, a];
         return {
           passed: false,
           severity: "red",

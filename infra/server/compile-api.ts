@@ -40,7 +40,7 @@ import {
   cacheKey,
   cachePut,
   computeToolchainVersionHash,
-  __testing as cacheTesting,
+  SIZE_WARN_BYTES,
 } from "./cache.ts";
 import { createPerRequestSketchDir } from "./sketch-fs.ts";
 import { runCompile } from "./run-compile.ts";
@@ -76,7 +76,7 @@ try {
 
 // Cache size health check at boot.
 const cacheBytes = await cacheDirSize();
-if (cacheBytes > cacheTesting.SIZE_WARN_BYTES) {
+if (cacheBytes > SIZE_WARN_BYTES) {
   process.stderr.write(
     `[compile-api] WARN: cache directory exceeds 4 GB (${(cacheBytes / 1024 / 1024 / 1024).toFixed(2)} GB). ` +
       `Eviction is a v0.2 cron task; consider manual cleanup.\n`,
@@ -227,8 +227,21 @@ app.post(
           };
         }
         // Cache the artifact for next time. Do this BEFORE responding so
-        // an immediate retry hits the cache.
-        await cachePut(key, { hex_b64: compile.hex_b64, stderr: compile.stderr });
+        // an immediate retry hits the cache. REL-001 — `cachePut` is wrapped
+        // because a throw here (ENOSPC, EACCES) was producing a 500 to the
+        // client even though the compile succeeded; the hex artifact was
+        // lost and the operator had no log signal because Hono's logger is
+        // intentionally off. Now: log to stderr, return success anyway.
+        try {
+          await cachePut(key, {
+            hex_b64: compile.hex_b64,
+            stderr: compile.stderr,
+          });
+        } catch (err) {
+          process.stderr.write(
+            `[compile-api] WARN: cachePut(${key}) failed (compile result still returned): ${(err as Error).message}\n`,
+          );
+        }
         return {
           httpStatus: 200 as const,
           body: {
@@ -255,13 +268,13 @@ app.post(
 if (import.meta.main) {
   Bun.serve({ port: PORT, fetch: app.fetch });
   // One structured stdout line on startup. No secret value, no env dump.
-  // eslint-disable-next-line no-console -- intentional structured stdout
-  console.log(
+  // Direct stdout write avoids any logger middleware interpolation.
+  process.stdout.write(
     JSON.stringify({
       event: "compile_api_started",
       port: PORT,
       toolchain_version_hash: TOOLCHAIN_HASH,
       cache_dir_bytes: cacheBytes,
-    }),
+    }) + "\n",
   );
 }

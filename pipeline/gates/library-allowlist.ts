@@ -131,7 +131,9 @@ export function validateAdditionalFileName(name: string): string | null {
   if (name.includes("..")) return "consecutive dots not allowed (path traversal or extension obfuscation)";
   if (name.includes("/") || name.includes("\\"))
     return "path separators not allowed (use a flat filename)";
-  if (name.startsWith("/")) return "absolute path not allowed";
+  // Note: a `startsWith("/")` check used to live here as a "leading slash"
+  // guard but it is unreachable — any name beginning with "/" contains "/"
+  // and is caught by the path-separator check above.
   if (!ADDITIONAL_FILE_NAME_REGEX.test(name))
     return `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`;
   return null;

@@ -4,8 +4,9 @@
  * discriminated failure union so the orchestrator (Unit 9) can route
  * each `kind` to the right recovery:
  *
- *   transport     — server unreachable (ECONNREFUSED, DNS, socket reset)
- *   timeout       — request aborted before response
+ *   transport     — server unreachable (ECONNREFUSED, DNS, socket reset,
+ *                   unexpected non-200 status, malformed 200 body)
+ *   timeout       — request aborted before response (AbortController fired)
  *   auth          — server returned 401 (bad/missing secret)
  *   bad-request   — server's zValidator rejected the request body (400)
  *   rate-limited  — server returned 429
@@ -15,11 +16,11 @@
  * surfaces without retry. `compile-error` and `bad-request` are worth
  * one repair turn through `generate()`.
  *
- * The gate import-paths the same `validateAdditionalFileName` and
- * `ADDITIONAL_FILE_NAME_REGEX` as the server (single source of truth) so
- * pipeline-side rejection happens BEFORE the network hop. The actual
- * cross-consistency gate already runs the predicate; this gate trusts
- * its caller to have done that.
+ * This gate trusts its caller (cross-consistency gate) to have already
+ * run `validateAdditionalFileName` against any `additional_files` keys.
+ * The Compile API server runs the same predicate independently as
+ * defense-in-depth, so the network hop is safe even if the caller
+ * skipped pre-validation.
  */
 
 import type { GateResult, Severity } from "../types.ts";
@@ -247,4 +248,28 @@ async function safeJson(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Compile-time exhaustiveness guard for `CompileGateFailureKind` switches.
+ *
+ * Usage in callers (e.g., Unit 9's repair() helper):
+ *
+ *   switch (result.kind) {
+ *     case "transport":     ...; break;
+ *     case "timeout":       ...; break;
+ *     case "auth":          ...; break;
+ *     case "bad-request":   ...; break;
+ *     case "rate-limited":  ...; break;
+ *     case "compile-error": ...; break;
+ *     default: assertNeverFailureKind(result.kind);
+ *   }
+ *
+ * If a future change adds a 7th kind to the union without updating the
+ * switch, tsc fails at the `default:` site rather than letting the case
+ * silently fall through. Mirrors the pattern already used in
+ * `pipeline/gates/cross-consistency.ts` for `AllowlistViolation`.
+ */
+export function assertNeverFailureKind(kind: never): never {
+  throw new Error(`Unhandled CompileGateFailureKind: ${String(kind)}`);
 }

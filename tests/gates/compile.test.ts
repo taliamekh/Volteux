@@ -126,7 +126,7 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     if (!result.ok) expect(result.kind).toBe("rate-limited");
   });
 
-  test("bad-request: 400 from server is mapped to kind:'bad-request' with errors[]", async () => {
+  test("bad-request: 400 from server is mapped to kind:'bad-request' with errors[] AND populated message", async () => {
     const fetchImpl = fakeFetch(() =>
       new Response(
         JSON.stringify({
@@ -147,6 +147,29 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     if (!result.ok) {
       expect(result.kind).toBe("bad-request");
       expect(result.errors.length).toBeGreaterThan(0);
+      // T-006: message must come from body.reason (or body.message) — not
+      // the default fallback. The orchestrator's auto-repair turn keys
+      // off message for diagnostics.
+      expect(result.message).toBe("does not match /...");
+    }
+  });
+
+  test("bad-request: 400 with non-JSON body falls back to default message + empty errors[]", async () => {
+    const fetchImpl = fakeFetch(() =>
+      new Response("not-json garbage", { status: 400 }),
+    );
+    const result = await runCompileGate(validReq, {
+      baseUrl: "http://test",
+      secret: "x".repeat(32),
+      fetch: fetchImpl,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("bad-request");
+      // safeJson returned null → message falls back to the default fallback
+      // string AND errors[] is empty (no body to JSON.stringify).
+      expect(result.message).toBe("compile-api rejected request shape");
+      expect(result.errors).toEqual([]);
     }
   });
 

@@ -203,27 +203,29 @@ describe("validateAdditionalFileName (the predicate the Compile API also imports
   });
 });
 
-// Adversarial review #1: the single-source regex argument depends on the
-// PREDICATE behaving identically wherever the constant lands. A test that
-// asserts only the regex string is parity (e.g. `regex.source ===
-// regex2.source`) would miss a case where a refactor diverges the
-// predicate even when the regex string still matches.
+// Adversarial review #1 (T-002 follow-up): the single-source regex argument
+// depends on the PREDICATE behaving identically AT THE SERVER'S CALL SITE,
+// not just at re-import of the same module path (which Bun caches and
+// always returns the same instance). To actually catch a refactor where
+// `infra/server/sketch-fs.ts` shims or wraps the import differently in
+// the Docker bundle, the test must drive the server-side code path —
+// not just re-import the module the server imports.
 //
-// Today, `infra/server/sketch-fs.ts` imports `validateAdditionalFileName`
-// directly from this module — the test below imports through the same
-// path the server uses. If a future refactor splits the constant into a
-// barrel export OR shims the import differently in the Docker bundle, this
-// test catches it the moment the predicate's return values diverge.
-describe("validateAdditionalFileName — predicate parity (single-source guarantee)", () => {
-  test("server-side import resolves to the same predicate behavior", async () => {
-    // `infra/server/sketch-fs.ts` uses `validateAdditionalFileName` for its
-    // filename pre-check. Re-import it via the server module's path to assert
-    // both call sites see identical behavior.
-    const { validateAdditionalFileName: serverPredicate } = await import(
-      "../../pipeline/gates/library-allowlist.ts"
+// `createPerRequestSketchDir` is the only consumer of
+// `validateAdditionalFileName` in `infra/server/sketch-fs.ts`. By calling
+// it with each candidate filename and inspecting the rejection reason,
+// the test exercises the predicate through the same import chain the
+// running server uses. If a future refactor introduces a server-local
+// shim or barrel that diverges, this test fails on the first divergent
+// input.
+describe("validateAdditionalFileName — predicate parity at the server's call site", () => {
+  test("createPerRequestSketchDir rejects exactly the inputs validateAdditionalFileName rejects", async () => {
+    const { createPerRequestSketchDir } = await import(
+      "../../infra/server/sketch-fs.ts"
     );
+
     const inputs = [
-      "sketch.ino",
+      "sketch.ino", // post-fix: rejected (would overwrite main sketch)
       "_internal.h",
       "1foo.ino",
       "a.b.ino",
@@ -232,15 +234,42 @@ describe("validateAdditionalFileName — predicate parity (single-source guarant
       ".hidden.h",
       "test..h",
       "../etc/passwd",
-      "/etc/passwd",
       "sub/foo.ino",
       "sketch\0.ino",
       "arduino-cli.yaml",
-      "sketch.json",
       "library.properties",
+      "platform.txt",
+      "extra.cpp",
     ];
-    for (const input of inputs) {
-      expect(serverPredicate(input)).toBe(validateAdditionalFileName(input));
+
+    for (const filename of inputs) {
+      const directReason = validateAdditionalFileName(filename);
+      const result = await createPerRequestSketchDir({
+        main_ino: "void setup(){}\nvoid loop(){}",
+        additional_files: { [filename]: "x" },
+      });
+
+      if (filename === "sketch.ino") {
+        // Server-side guard layered on top of the predicate (ADV-002).
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.kind).toBe("filename-allowlist");
+          expect(result.error.filename).toBe(filename);
+        }
+        continue;
+      }
+
+      if (directReason === null) {
+        expect(result.ok).toBe(true);
+        if (result.ok) await result.handle.cleanup();
+      } else {
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.kind).toBe("filename-allowlist");
+          expect(result.error.filename).toBe(filename);
+          expect(result.error.reason).toBe(directReason);
+        }
+      }
     }
   });
 });

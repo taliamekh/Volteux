@@ -9,8 +9,13 @@
  *     The hardened filename regex forbids leading-dash filenames, but
  *     defense in depth: argv-style invocation forecloses every shell-meta
  *     class.
- *   - The shared `--build-cache-path` (the AVR core's compiled objects) is
- *     reused across requests for warm-cache wins.
+ *   - The shared build cache (the AVR core's compiled objects) is reused
+ *     across requests for warm-cache wins. The path is set ONCE at image
+ *     build time via `arduino-cli config set build_cache.path` (in the
+ *     Dockerfile), NOT per-invocation. The previous `--build-cache-path`
+ *     CLI flag is deprecated in arduino-cli 1.4.x and was producing a
+ *     deprecation warning on every cold compile that landed in `stderr`
+ *     and would have been fed back to Sonnet's auto-repair turn.
  *
  * Returns the .hex artifact (base64) and `stderr` verbatim. The handler
  * surfaces stderr on compile failure so the LLM auto-repair turn (Unit 9)
@@ -19,8 +24,6 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-
-const SHARED_BUILD_CACHE = "/var/cache/arduino-build";
 
 export interface RunCompileInput {
   /** Absolute path to the sketch directory (from sketch-fs.ts). */
@@ -63,8 +66,6 @@ export async function runCompile(input: RunCompileInput): Promise<RunCompileResu
       outDir,
       "--build-path",
       buildPath,
-      "--build-cache-path",
-      SHARED_BUILD_CACHE,
       "--warnings",
       "default",
       "--jobs",

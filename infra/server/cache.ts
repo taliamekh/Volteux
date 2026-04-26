@@ -29,7 +29,14 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promi
 import { join } from "node:path";
 
 const CACHE_DIR = process.env.VOLTEUX_CACHE_DIR ?? "/var/cache/volteux";
-const SIZE_WARN_BYTES = 4 * 1024 * 1024 * 1024; // 4 GB
+/**
+ * Boot-time WARN threshold for the artifact cache directory. Production
+ * constant (NOT a test-only value). Exposed so `compile-api.ts` can compare
+ * the result of `cacheDirSize()` at startup and emit a stderr warning when
+ * the cache is approaching the documented ~5 GB cap before the v0.2 cron
+ * eviction lands.
+ */
+export const SIZE_WARN_BYTES = 4 * 1024 * 1024 * 1024; // 4 GB
 
 let cachedToolchainHash: string | null = null;
 
@@ -85,14 +92,30 @@ export async function computeToolchainVersionHash(): Promise<string> {
   return cachedToolchainHash;
 }
 
-/** Stable cache key. Sorting is essential — Object.keys ordering is preserved
- *  by V8/Bun for string keys but the contract is "sorted before hashing." */
+/**
+ * Stable cache key.
+ *
+ * Sorting `additional_files` and `libraries` is essential — Object.keys
+ * ordering happens to be insertion-preserving in V8/Bun for string keys, but
+ * the contract is "sorted before hashing" so the same logical input always
+ * produces the same key regardless of insertion order.
+ *
+ * Serialization uses `JSON.stringify(Object.fromEntries(sorted))` rather
+ * than a `\0`-delimited join. The delimited form was reachable for cache
+ * collisions when an `additional_files` value happened to contain a literal
+ * NUL byte (verified by adversarial review): one entry `{a.h: "x\0b.h\0y"}`
+ * produced the same hash bytes as two entries `{a.h:"x", b.h:"y"}`. Filename
+ * KEYS are guarded by `validateAdditionalFileName`, but values are
+ * `z.string()` and accept arbitrary bytes. JSON.stringify is unambiguous
+ * about structure regardless of value content.
+ */
 export function cacheKey(input: CacheKeyInput): string {
-  const additionalSorted = Object.entries(input.additional_files)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}\0${v}`)
-    .join("\0");
-  const librariesSorted = [...input.libraries].sort().join("\0");
+  const additionalSorted = Object.fromEntries(
+    Object.entries(input.additional_files).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+  );
+  const librariesSorted = [...input.libraries].sort();
 
   const hash = createHash("sha256");
   hash.update(input.toolchainHash);
@@ -101,13 +124,22 @@ export function cacheKey(input: CacheKeyInput): string {
   hash.update("\0");
   hash.update(input.main_ino);
   hash.update("\0");
-  hash.update(additionalSorted);
+  hash.update(JSON.stringify(additionalSorted));
   hash.update("\0");
-  hash.update(librariesSorted);
+  hash.update(JSON.stringify(librariesSorted));
   return `${input.toolchainHash.slice(0, 8)}-${hash.digest("hex")}`;
 }
 
-/** Cache lookup. Returns `null` on miss or any read error. */
+/**
+ * Cache lookup. Returns `null` on miss; on any read error, logs to stderr
+ * and also returns `null` so the caller falls through to a fresh compile.
+ *
+ * The miss path (ENOENT) is the hot path and is intentionally silent. Real
+ * read errors (EACCES, EIO, malformed JSON) are warnings — the request
+ * still succeeds via recompile, but operators need a signal that the cache
+ * is degraded. Per CLAUDE.md "no silent failures", every non-ENOENT error
+ * surfaces here.
+ */
 export async function cacheGet(key: string): Promise<CacheEntry | null> {
   try {
     const [hex, jsonText] = await Promise.all([
@@ -119,7 +151,12 @@ export async function cacheGet(key: string): Promise<CacheEntry | null> {
       hex_b64: hex.toString("base64"),
       stderr: json.stderr ?? "",
     };
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      process.stderr.write(
+        `[cache] WARN: cacheGet(${key}) failed: ${(err as Error).message}\n`,
+      );
+    }
     return null;
   }
 }
@@ -141,6 +178,13 @@ export async function cachePut(key: string, entry: CacheEntry): Promise<void> {
 /**
  * Sum the cache directory size in bytes. Cheap O(N) over entries; called
  * once at boot and acceptable for the v0 entry count.
+ *
+ * The ENOENT case (cache dir doesn't exist yet) is the cold-start hot path
+ * and is silent — `cachePut` creates the directory on first write. Any
+ * other error (EACCES from a misconfigured mount, EIO from disk corruption)
+ * silently masking would suppress the boot-time 4 GB WARN that operators
+ * rely on to spot disk pressure before compiles fail. Per CLAUDE.md "no
+ * silent failures."
  */
 export async function cacheDirSize(): Promise<number> {
   try {
@@ -150,12 +194,19 @@ export async function cacheDirSize(): Promise<number> {
       try {
         const s = await stat(join(CACHE_DIR, name));
         total += s.size;
-      } catch {
-        // ignore unreadable entries
+      } catch (err) {
+        process.stderr.write(
+          `[cache] WARN: stat(${name}) skipped: ${(err as Error).message}\n`,
+        );
       }
     }
     return total;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      process.stderr.write(
+        `[cache] WARN: cacheDirSize readdir(${CACHE_DIR}) failed: ${(err as Error).message}\n`,
+      );
+    }
     return 0;
   }
 }
@@ -178,12 +229,26 @@ async function runArduinoCliJson(args: ReadonlyArray<string>): Promise<unknown> 
       `[cache] arduino-cli ${args.join(" ")} exited ${exitCode}: ${stderrText.trim()}`,
     );
   }
-  return JSON.parse(stdoutText);
+  try {
+    return JSON.parse(stdoutText);
+  } catch (err) {
+    // Wrap the raw SyntaxError with the subcommand context. Without this,
+    // a future arduino-cli release that prepends a deprecation banner to
+    // stdout would surface as "Unexpected token W in JSON at position 0"
+    // — true but useless for diagnosis.
+    throw new Error(
+      `[cache] arduino-cli ${args.join(" ")} --json emitted non-JSON (${(err as Error).message}). First 200 bytes: ${stdoutText.slice(0, 200)}`,
+    );
+  }
 }
 
+/**
+ * Test-only escape hatch. Production code MUST NOT import from here.
+ * The boot-time toolchain hash is memoized; tests need a way to reset
+ * the memo to exercise the recompute path without spawning a new process.
+ */
 export const __testing = {
   resetMemoizedHash(): void {
     cachedToolchainHash = null;
   },
-  SIZE_WARN_BYTES,
 };

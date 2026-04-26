@@ -334,10 +334,24 @@ describe("sensor-trig-output-pin", () => {
     expect(result.passed).toBe(false);
     if (!result.passed) {
       expect(result.severity).toBe("red");
+      // Assert on structured context (stable enum), not prose; T-003.
+      expect(result.context?.target_type).toBe("actuator");
+      expect(result.context?.connected_to).toBe("a1");
       expect(result.message).toContain("Trig");
-      expect(result.message).toContain("a1");
-      expect(result.message).toContain("type actuator");
     }
+  });
+
+  // ADV-002 / sketch-fs guard regression: ensure the rule does not crash
+  // when given malformed input the cross-consistency gate would normally
+  // catch first. Defensive — `resolveEndpoint` returning null short-circuits.
+  test("does not throw on a connection referencing an unknown component", () => {
+    const doc = clone();
+    for (const conn of doc.connections) {
+      if (conn.from.component_id === "s1" && conn.from.pin_label === "Trig") {
+        conn.to.component_id = "ghost";
+      }
+    }
+    expect(() => rule.check(doc)).not.toThrow();
   });
 });
 
@@ -373,9 +387,10 @@ describe("sensor-echo-input-pin", () => {
     expect(result.passed).toBe(false);
     if (!result.passed) {
       expect(result.severity).toBe("red");
+      // Assert on structured context (stable enum), not prose; T-003.
+      expect(result.context?.target_type).toBe("actuator");
+      expect(result.context?.connected_to).toBe("a1");
       expect(result.message).toContain("Echo");
-      expect(result.message).toContain("a1");
-      expect(result.message).toContain("type actuator");
     }
   });
 });
