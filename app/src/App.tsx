@@ -3,14 +3,14 @@ import FlashModal from "./components/FlashModal";
 import Header from "./components/Header";
 import SignInModal from "./components/SignInModal";
 import TweaksPanel from "./components/TweaksPanel";
-import LandingView from "./views/LandingView";
+import LandingView, { type LandingHandle } from "./views/LandingView";
 import LoadingView from "./views/LoadingView";
 import ResultView from "./views/ResultView";
 import { applyRefinement, summarizeChange } from "./data/projects";
 import { pipelineToProject } from "./data/adapter";
 import { loadDefaultFixture } from "./data/fixtures";
 import { decode, encode } from "./lib/urlHash";
-import type { Project, Tweaks, User, ViewName } from "./types";
+import { UserSchema, type Project, type Tweaks, type User, type ViewName } from "./types";
 
 const TWEAK_DEFAULTS: Tweaks = {
   palette: "violet",
@@ -23,7 +23,10 @@ const TWEAK_DEFAULTS: Tweaks = {
 function loadUser(): User | null {
   try {
     const raw = localStorage.getItem("volteux_user");
-    return raw ? (JSON.parse(raw) as User) : null;
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    const result = UserSchema.safeParse(parsed);
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
@@ -42,6 +45,11 @@ export default function App() {
   const [flashing, setFlashing] = useState(false);
   const [user, setUser] = useState<User | null>(loadUser);
   const [tweaks, setTweaks] = useState<Tweaks>(TWEAK_DEFAULTS);
+
+  // Imperative handle to LandingView so the header CTA can scroll back +
+  // focus the prompt input. Replaces the prior window.__volteux_focusInput
+  // global assignment (kt-007).
+  const landingRef = useRef<LandingHandle | null>(null);
 
   // Loop-prevention guard for the URL-hash effects (U8). When the mount-time
   // restore effect successfully decodes a document and calls setProject, the
@@ -189,14 +197,15 @@ export default function App() {
   // loop. history.replaceState avoids polluting browser history on every
   // chat-refine.
   useEffect(() => {
-    if (!project?.document) return;
+    if (!project) return;
     if (restoredFromHashRef.current) {
       restoredFromHashRef.current = false;
       return;
     }
+    const doc = project.document;
     let cancelled = false;
     (async () => {
-      const hash = await encode(project.document!);
+      const hash = await encode(doc);
       if (cancelled) return;
       window.history.replaceState(null, "", `#${hash}`);
     })();
@@ -236,8 +245,7 @@ export default function App() {
   };
 
   const finishLoading = () => {
-    const proj = pipelineToProject(loadDefaultFixture());
-    setProject({ ...proj, prompt });
+    setProject(pipelineToProject(loadDefaultFixture()));
     setView("result");
   };
 
@@ -292,9 +300,7 @@ export default function App() {
         accountOpen={accountOpen}
         onCloseAccount={() => setAccountOpen(false)}
         onNewProject={goLanding}
-        onScrollToInput={() =>
-          (window as Window & { __volteux_focusInput?: () => void }).__volteux_focusInput?.()
-        }
+        onScrollToInput={() => landingRef.current?.focusInput()}
         user={user}
         onSignInClick={() => setAuthOpen(true)}
         onSignOut={() => {
@@ -306,12 +312,12 @@ export default function App() {
       {view === "landing" && (
         <div className="view active">
           <LandingView
+            ref={landingRef}
             onSubmit={startBuild}
             onSeeExample={() => {
               const exampleText = "a robot arm that waves when something gets close";
               setPrompt(exampleText);
-              const proj = pipelineToProject(loadDefaultFixture());
-              setProject({ ...proj, prompt: exampleText });
+              setProject(pipelineToProject(loadDefaultFixture()));
               setView("result");
             }}
             setHeaderCtaVisible={setHeaderCtaVisible}

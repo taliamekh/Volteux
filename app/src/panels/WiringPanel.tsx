@@ -14,18 +14,7 @@ import {
   shiftHole,
   type Hole,
 } from "./breadboard-geometry";
-import fixtureJson from "../../../fixtures/uno-ultrasonic-servo.json";
-import {
-  VolteuxProjectDocumentSchema,
-  type VolteuxProjectDocument,
-} from "../../../schemas/document.zod";
-
-// Fallback document for the brief render window before `project.document`
-// is populated by the adapter (and for any test that constructs a Project
-// without a document). U8 made `project.document` available; we prefer it
-// when present and fall back to the fixture so the panel never crashes.
-const fixtureDoc: VolteuxProjectDocument =
-  VolteuxProjectDocumentSchema.parse(fixtureJson);
+import type { VolteuxProjectDocument } from "../../../schemas/document.zod";
 
 interface WiringPanelProps {
   project: Project;
@@ -234,7 +223,7 @@ function curvedPath(
 }
 
 export default function WiringPanel({ project, expanded, onExpandToggle }: WiringPanelProps) {
-  const doc = project.document ?? fixtureDoc;
+  const doc = project.document;
   const placed = placeOnBoard(doc);
 
   return (

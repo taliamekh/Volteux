@@ -85,19 +85,6 @@ const HOTSPOT_Y_OFFSET_BY_ICON: Readonly<Record<IconKind, number>> = {
   eye: 0.55,
 };
 
-/**
- * Strip the display-only "SKU " prefix that the parts adapter adds to
- * `Part.sku` (see `app/src/data/adapter.ts` ~line 254). Pure helper so
- * the lookup tables can be keyed by raw SKU (matching the registry).
- *
- * Cluster B follow-up: the `Part.sku` shape ("SKU 239" vs `{display, id}`)
- * is a typed-lookup footgun TypeScript can't catch. Mitigated locally
- * with this helper; structural fix is out of scope for this unit.
- */
-function skuKey(prefixed: string): string {
-  return prefixed.startsWith("SKU ") ? prefixed.slice(4) : prefixed;
-}
-
 // ---------- Per-part mesh ----------
 
 interface PartMeshProps {
@@ -253,18 +240,15 @@ const HeroScene = forwardRef<HeroSceneHandle, HeroSceneProps>(function HeroScene
       {parts.map((part) => {
         // The breadboard's mesh is rendered as <BreadboardSlab/> above;
         // we still want its hotspot for the click-to-learn workflow.
-        const isBreadboard = part.sku === "SKU 239";
+        const isBreadboard = part.sku === "239";
         // Prefer SKU-keyed positions (unique per component); fall back to
         // icon-keyed (some icons cover multiple SKUs); then a hard default.
-        // The prefix-strip is intentional: the adapter formats `Part.sku`
-        // as a display string ("SKU 239"). Falling back to the icon table
-        // when a SKU is missing here is acceptable because the adapter
-        // throws on truly unknown SKUs at the parts-list boundary
-        // (`pipelineToProject` in `data/adapter.ts`).
-        const sku = skuKey(part.sku);
-        const pos = POSITIONS_BY_SKU[sku] ?? POSITIONS_BY_ICON[part.icon] ?? [0, 0.2, 0];
+        // Falling back to the icon table when a SKU is missing here is
+        // acceptable because the adapter throws on truly unknown SKUs at
+        // the parts-list boundary (`pipelineToProject` in `data/adapter.ts`).
+        const pos = POSITIONS_BY_SKU[part.sku] ?? POSITIONS_BY_ICON[part.icon] ?? [0, 0.2, 0];
         const hotspotY =
-          HOTSPOT_Y_OFFSET_BY_SKU[sku] ?? HOTSPOT_Y_OFFSET_BY_ICON[part.icon] ?? 0.5;
+          HOTSPOT_Y_OFFSET_BY_SKU[part.sku] ?? HOTSPOT_Y_OFFSET_BY_ICON[part.icon] ?? 0.5;
         const isActive = selectedPart === part.id;
 
         return (

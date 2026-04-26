@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { examples } from "../data/projects";
+
+export interface LandingHandle {
+  /** Scroll the landing area to the top and focus the prompt input. */
+  focusInput: () => void;
+}
 
 interface LandingViewProps {
   onSubmit: (prompt: string) => void;
@@ -7,11 +12,10 @@ interface LandingViewProps {
   setHeaderCtaVisible: (v: boolean) => void;
 }
 
-export default function LandingView({
-  onSubmit,
-  onSeeExample,
-  setHeaderCtaVisible,
-}: LandingViewProps) {
+const LandingView = forwardRef<LandingHandle, LandingViewProps>(function LandingView(
+  { onSubmit, onSeeExample, setHeaderCtaVisible },
+  ref,
+) {
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const heroInputRef = useRef<HTMLDivElement | null>(null);
@@ -28,13 +32,19 @@ export default function LandingView({
     return () => obs.disconnect();
   }, [setHeaderCtaVisible]);
 
-  // Allow header CTA click to scroll back + focus the prompt input.
-  useEffect(() => {
-    (window as Window & { __volteux_focusInput?: () => void }).__volteux_focusInput = () => {
-      scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-      window.setTimeout(() => inputRef.current?.focus(), 400);
-    };
-  }, []);
+  // Expose focusInput so the header CTA can scroll back + focus the prompt
+  // input without going through a global. Replaces the prior
+  // `window.__volteux_focusInput` shim.
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusInput: () => {
+        scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+        window.setTimeout(() => inputRef.current?.focus(), 400);
+      },
+    }),
+    [],
+  );
 
   const submit = () => {
     const v = text.trim();
@@ -244,4 +254,6 @@ export default function LandingView({
       </footer>
     </div>
   );
-}
+});
+
+export default LandingView;

@@ -44,7 +44,7 @@ export default function PartsPanel({ project, owned, setOwned }: PartsPanelProps
             </div>
             <div className="part-info">
               <div className="part-name">{p.name}</div>
-              <div className="part-sku">{p.sku}</div>
+              <div className="part-sku">SKU {p.sku}</div>
             </div>
             <span className="part-qty">×{p.qty}</span>
             <span className="part-price">${p.price.toFixed(2)}</span>
@@ -67,9 +67,8 @@ export default function PartsPanel({ project, owned, setOwned }: PartsPanelProps
         </div>
         <button
           className="btn-cart"
-          disabled={allOwned || !project.document}
+          disabled={allOwned}
           onClick={() => {
-            if (!project.document) return;
             window.open(cartUrl(project.document), "_blank", "noopener,noreferrer");
           }}
           style={{ backgroundColor: "rgb(250, 250, 250)" }}

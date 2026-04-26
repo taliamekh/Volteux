@@ -16,11 +16,16 @@ import {
   lookupBySku,
   type ComponentRegistryEntry,
 } from "../../../components/registry";
-import type { VolteuxProjectDocument } from "../../../schemas/document.zod";
 import type {
-  CodeLine,
-  CodeSegment,
-  CodeSegmentKind,
+  VolteuxConnection,
+  VolteuxProjectDocument,
+} from "../../../schemas/document.zod";
+
+// The schema's wire_color enum, narrowed for the adapter's exhaustive switch.
+// Pulled from the Zod-derived type so a schema-side enum addition forces a
+// compile-time fail at the never-check below until we update the mapping.
+type SchemaWireColor = NonNullable<VolteuxConnection["wire_color"]>;
+import type {
   IconKind,
   Part,
   Position,
@@ -88,7 +93,8 @@ function iconForEntry(entry: ComponentRegistryEntry): IconKind {
  * "purple" is UI-only (the chat's "add a beep" path adds it) and never
  * appears in the schema, so it's not produced here.
  */
-function mapWireColor(color: string | undefined): WireColor {
+function mapWireColor(color: SchemaWireColor | undefined): WireColor {
+  if (color === undefined) return "blue"; // safe fallback for missing color
   switch (color) {
     case "red":
       return "red";
@@ -104,93 +110,17 @@ function mapWireColor(color: string | undefined): WireColor {
       return "yellow"; // closest UI palette match
     case "white":
       return "blue";   // closest UI palette match
-    default:
-      return "blue";   // safe fallback for missing color
+    default: {
+      // Exhaustiveness guard: if a future schema adds a new wire_color enum
+      // value, the compile-time check (`color: never`) fails until the new
+      // branch is added above. Throws at runtime as a defense-in-depth match
+      // for the pipeline's `assertNeverCompileGateFailureKind` pattern — a
+      // never-return form would silently leak the unknown enum value through
+      // the type system, contradicting CLAUDE.md "no silent failures".
+      const _exhaustive: never = color;
+      throw new Error(`Unhandled wire_color enum value: ${String(_exhaustive)}`);
+    }
   }
-}
-
-// ---------- Tiny C++ tokenizer ----------
-
-const CPP_KEYWORDS = new Set([
-  "#include",
-  "#define",
-  "void",
-  "int",
-  "long",
-  "const",
-  "if",
-  "else",
-  "for",
-  "while",
-  "return",
-  "true",
-  "false",
-]);
-
-const CPP_FUNCTIONS = new Set([
-  "setup",
-  "loop",
-  "pinMode",
-  "digitalRead",
-  "digitalWrite",
-  "delay",
-  "delayMicroseconds",
-  "pulseIn",
-  "attach",
-  "write",
-  "begin",
-]);
-
-function classifyToken(tok: string): CodeSegmentKind {
-  if (CPP_KEYWORDS.has(tok)) return "kw";
-  if (CPP_FUNCTIONS.has(tok)) return "fn";
-  if (/^\d+$/.test(tok)) return "num";
-  return "";
-}
-
-/**
- * Coarse line-by-line tokenizer. Renders comments + angle-bracketed includes
- * + a few keywords/functions/numbers. Good enough as a v0 fallback before
- * U4's Monaco editor lands.
- */
-function tokenizeSketch(source: string): CodeLine[] {
-  const lines = source.split(/\r?\n/);
-  const out: CodeLine[] = [];
-  for (const raw of lines) {
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) {
-      out.push({ kind: "blank" });
-      continue;
-    }
-    if (trimmed.startsWith("//")) {
-      out.push({ kind: "com", text: raw });
-      continue;
-    }
-    // Tokenize: keep leading whitespace, then split on word boundaries
-    // while preserving angle-bracket strings as a single "str" token.
-    const parts: CodeSegment[] = [];
-    const leadingWs = raw.match(/^\s*/)?.[0] ?? "";
-    if (leadingWs.length > 0) parts.push({ k: "", t: leadingWs });
-    const body = raw.slice(leadingWs.length);
-    // Regex pieces:
-    //   <[^>]+>  — include's angle-bracket payload
-    //   #?[A-Za-z_][A-Za-z0-9_]*  — identifiers and preprocessor directives
-    //   \d+  — numbers
-    //   .  — any single other char (whitespace, punctuation)
-    const tokenRe = /<[^>]+>|#?[A-Za-z_][A-Za-z0-9_]*|\d+|./g;
-    let match: RegExpExecArray | null;
-    while ((match = tokenRe.exec(body)) !== null) {
-      const tok = match[0];
-      if (tok.startsWith("<") && tok.endsWith(">")) {
-        parts.push({ k: "str", t: tok });
-      } else {
-        const k = classifyToken(tok);
-        parts.push({ k, t: tok });
-      }
-    }
-    out.push({ kind: "raw", parts });
-  }
-  return out;
 }
 
 // ---------- Title / project-key mapping ----------
@@ -251,7 +181,7 @@ export function pipelineToProject(doc: VolteuxProjectDocument): Project {
     parts.push({
       id: c.id,
       name: entry.name,
-      sku: `SKU ${entry.sku}`,
+      sku: entry.sku,
       price: DEFAULT_PRICE_BY_SKU[entry.sku] ?? 0,
       qty: c.quantity,
       icon: iconForEntry(entry),
@@ -269,9 +199,6 @@ export function pipelineToProject(doc: VolteuxProjectDocument): Project {
     pin: conn.to.pin_label,
   }));
 
-  // ----- Code (tokenize the raw .ino for the legacy span renderer) -----
-  const code = tokenizeSketch(doc.sketch.main_ino);
-
   // ----- Title / blurb / key -----
   const titleInfo = ARCHETYPE_TITLES[doc.archetype_id] ?? {
     title: doc.archetype_id,
@@ -282,14 +209,12 @@ export function pipelineToProject(doc: VolteuxProjectDocument): Project {
 
   return {
     key,
-    match: [],
     board: doc.board.name,
     confidence: 95, // placeholder; real value comes from intent classifier later
     title: titleInfo.title,
     blurb: titleInfo.blurb,
     parts,
     wiring,
-    code,
     sketchSource: doc.sketch.main_ino,
     document: doc,
     refineSuggestions: [

@@ -7,6 +7,7 @@
 // will be replaced by — or derived from — `schemas/document.zod.ts`.
 // Until then this is the contract the UI components rely on.
 
+import { z } from "zod";
 import type { VolteuxProjectDocument } from "../../schemas/document.zod";
 
 export type IconKind =
@@ -51,47 +52,29 @@ export interface WiringConnection {
   pin: string;
 }
 
-export type CodeSegmentKind = "kw" | "fn" | "str" | "com" | "num" | "";
-
-export interface CodeSegment {
-  k: CodeSegmentKind;
-  t: string;
-}
-
-export type CodeLine =
-  | { kind: "com"; text: string }
-  | { kind: "blank" }
-  | { kind: "raw"; parts: CodeSegment[] };
-
 export interface Project {
   /** Stable key used for resets / equality checks. */
   key: string;
-  /** Original prompt the user typed (or the canned example). */
-  prompt?: string;
-  /** Keywords used by the local matcher — UI-only metadata (legacy). */
-  match: string[];
   board: string;
   confidence: number;
   title: string;
   blurb: string;
   parts: Part[];
   wiring: WiringConnection[];
-  code: CodeLine[];
   /**
-   * Raw .ino source for the Monaco editor (U4). Populated by the adapter
-   * from `document.sketch.main_ino`. Keep `code` populated alongside as a
-   * U1-window fallback until U4 lands.
+   * Raw .ino source for the Monaco editor. Populated by the adapter from
+   * `document.sketch.main_ino`.
    */
   sketchSource: string;
   /**
-   * Raw schema-validated source document. Available when the project came
-   * from a fixture or pipeline output (always today; null only in tests).
-   * Carries data the view-model intentionally drops (breadboard_layout,
-   * raw connections, archetype metadata) so panels and side-effects (URL
-   * hash persistence, Adafruit cart URL) can read directly from the
-   * canonical schema instead of reaching back to the fixture.
+   * Raw schema-validated source document. Carries data the view-model
+   * intentionally drops (breadboard_layout, raw connections, archetype
+   * metadata) so panels and side-effects (URL hash persistence, Adafruit
+   * cart URL) can read directly from the canonical schema instead of
+   * reaching back to the fixture. Required: the adapter always populates
+   * it; tests construct projects via `pipelineToProject(loadFixture())`.
    */
-  document?: VolteuxProjectDocument;
+  document: VolteuxProjectDocument;
   refineSuggestions: string[];
 }
 
@@ -119,11 +102,16 @@ export interface Tweaks {
   useAi: boolean;
 }
 
-export interface User {
-  email: string;
-  initials: string;
-  provider: "email" | "google" | "github";
-}
+// User shape persisted to localStorage. Validated via UserSchema.safeParse on
+// load so a tampered or pre-schema-change entry returns null instead of
+// blowing up downstream consumers via a JSON.parse-as-cast.
+export const UserSchema = z.object({
+  email: z.string(),
+  initials: z.string(),
+  provider: z.enum(["email", "google", "github"]),
+});
+
+export type User = z.infer<typeof UserSchema>;
 
 export type ChatMessage =
   | { role: "user"; text: string }

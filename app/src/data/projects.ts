@@ -59,46 +59,29 @@ export function applyRefinement(
     const nextSketch = p.sketchSource.replace(waveBlock, wrapBlock);
     if (nextSketch !== p.sketchSource) {
       p.sketchSource = nextSketch;
-      if (p.document) {
-        p.document = {
-          ...p.document,
-          sketch: {
-            ...p.document.sketch,
-            main_ino: nextSketch,
-          },
-        };
-      }
-      changed = true;
-    }
-  }
-
-  // "really close" / "trigger when closer" → tighten the threshold.
-  // Update both representations: legacy p.code (still mutated for any consumer
-  // that hasn't migrated yet) AND p.sketchSource + p.document.sketch.main_ino
-  // (what Monaco renders + what the URL-hash share encodes). Per code review
-  // (kt-001/api-001), refinements that only touch p.code are silently invisible
-  // because U4 swapped CodePanel to render sketchSource via Monaco.
-  if (/really close|closer|10\s*cm|nearby/.test(r)) {
-    p.code = p.code.map((line) =>
-      line.kind === "raw"
-        ? {
-            kind: "raw",
-            parts: line.parts.map((part) =>
-              part.k === "num" && part.t === "25" ? { k: "num" as const, t: "10" } : part,
-            ),
-          }
-        : line,
-    );
-    p.sketchSource = p.sketchSource.replace(/distance < 25/g, "distance < 10");
-    if (p.document) {
       p.document = {
         ...p.document,
         sketch: {
           ...p.document.sketch,
-          main_ino: p.document.sketch.main_ino.replace(/distance < 25/g, "distance < 10"),
+          main_ino: nextSketch,
         },
       };
+      changed = true;
     }
+  }
+
+  // "really close" / "trigger when closer" → tighten the threshold in both
+  // representations the UI renders: p.sketchSource (Monaco) and
+  // p.document.sketch.main_ino (URL-hash share).
+  if (/really close|closer|10\s*cm|nearby/.test(r)) {
+    p.sketchSource = p.sketchSource.replace(/distance < 25/g, "distance < 10");
+    p.document = {
+      ...p.document,
+      sketch: {
+        ...p.document.sketch,
+        main_ino: p.document.sketch.main_ino.replace(/distance < 25/g, "distance < 10"),
+      },
+    };
     changed = true;
   }
 
@@ -114,7 +97,7 @@ export function applyRefinement(
     p.parts.push({
       id: "buzzer",
       name: "Piezo buzzer",
-      sku: "SKU 1536",
+      sku: "1536",
       price: 1.95,
       qty: 1,
       icon: "buzzer",
@@ -122,42 +105,22 @@ export function applyRefinement(
       pos: { x: 30, y: 70 },
     });
     p.wiring.push({ from: "Buzzer+", to: "D5", color: "purple", pin: "D5" });
-    if (p.document) {
-      p.document = {
-        ...p.document,
-        components: [
-          ...p.document.components,
-          { id: "bz1", sku: "1536", quantity: 1 },
-        ],
-        connections: [
-          ...p.document.connections,
-          {
-            from: { component_id: "bz1", pin_label: "+" },
-            to: { component_id: "u1", pin_label: "D5" },
-            wire_color: "yellow",
-            purpose: "Buzzer signal pin",
-          },
-        ],
-      };
-    }
-    changed = true;
-  }
-
-  // "stay open longer" — kept for the (currently unreachable) automatic-gate
-  // archetype. Dead code today; flagged in maintainability review M-04 for
-  // cleanup once the archetype is either added or formally dropped.
-  if (/longer|more time|stay open/.test(r) && project.key === "automatic-gate") {
-    p.code = p.code.map((line) =>
-      line.kind === "raw"
-        ? {
-            kind: "raw",
-            parts: line.parts.map((part) =>
-              part.k === "num" && part.t === "5000" ? { k: "num" as const, t: "10000" } : part,
-            ),
-          }
-        : line,
-    );
-    p.sketchSource = p.sketchSource.replace(/delay\(5000\)/g, "delay(10000)");
+    p.document = {
+      ...p.document,
+      components: [
+        ...p.document.components,
+        { id: "bz1", sku: "1536", quantity: 1 },
+      ],
+      connections: [
+        ...p.document.connections,
+        {
+          from: { component_id: "bz1", pin_label: "+" },
+          to: { component_id: "u1", pin_label: "D5" },
+          wire_color: "yellow",
+          purpose: "Buzzer signal pin",
+        },
+      ],
+    };
     changed = true;
   }
 
