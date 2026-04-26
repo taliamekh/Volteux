@@ -9,8 +9,22 @@ import ResultView from "./views/ResultView";
 import { applyRefinement, summarizeChange } from "./data/projects";
 import { pipelineToProject } from "./data/adapter";
 import { loadDefaultFixture } from "./data/fixtures";
+import {
+  fetchPipeline,
+  PipelineClientError,
+  type PipelineResult,
+} from "./data/pipeline-client";
 import { decode, encode } from "./lib/urlHash";
 import type { Project, Tweaks, User, ViewName } from "./types";
+
+interface PipelineLoadError {
+  /** Discriminated kind: pipeline-side (PipelineFailureKind) or client-side. */
+  kind: string;
+  /** Beginner-readable headline (Honest Gap explanation when pipeline returned ok:false). */
+  headline: string;
+  /** Optional supporting detail (transport URL, error message). */
+  detail?: string;
+}
 
 const TWEAK_DEFAULTS: Tweaks = {
   palette: "violet",
@@ -42,6 +56,13 @@ export default function App() {
   const [flashing, setFlashing] = useState(false);
   const [user, setUser] = useState<User | null>(loadUser);
   const [tweaks, setTweaks] = useState<Tweaks>(TWEAK_DEFAULTS);
+  const [loadError, setLoadError] = useState<PipelineLoadError | null>(null);
+
+  // Pending pipeline result for the in-flight `fetchPipeline` call. The
+  // LoadingView's timer races this promise; whichever finishes last wins
+  // and `finishLoading` routes based on the resolved value. Stored as a
+  // ref (not state) because we don't want re-renders on Promise creation.
+  const pendingPipelineRef = useRef<Promise<PipelineResult | PipelineClientError> | null>(null);
 
   // Loop-prevention guard for the URL-hash effects (U8). When the mount-time
   // restore effect successfully decodes a document and calls setProject, the
@@ -232,11 +253,65 @@ export default function App() {
 
   const startBuild = (p: string) => {
     setPrompt(p);
+    setLoadError(null);
     setView("loading");
+    // Fire the live pipeline fetch immediately. The LoadingView's timer
+    // animation races this promise; `finishLoading` awaits whichever is
+    // still in-flight when the timer expires. Catching here so an
+    // unhandled rejection doesn't surface as a console error before
+    // `finishLoading` consumes the settled value.
+    pendingPipelineRef.current = fetchPipeline(p).catch((err) =>
+      err instanceof PipelineClientError
+        ? err
+        : new PipelineClientError("transport", err instanceof Error ? err.message : String(err)),
+    );
   };
 
-  const finishLoading = () => {
-    const proj = pipelineToProject(loadDefaultFixture());
+  const finishLoading = async () => {
+    // The LoadingView timer just expired. Wait for the in-flight fetch
+    // (resolved or pending) and route to result / error accordingly.
+    const pending = pendingPipelineRef.current;
+    pendingPipelineRef.current = null;
+
+    if (pending === null) {
+      // No fetch was started (e.g., direct manipulation). Fall back to
+      // the canonical fixture so the loading view doesn't dead-end.
+      const proj = pipelineToProject(loadDefaultFixture());
+      setProject({ ...proj, prompt });
+      setView("result");
+      return;
+    }
+
+    const settled = await pending;
+    if (settled instanceof PipelineClientError) {
+      setLoadError({
+        kind: settled.kind,
+        headline:
+          settled.kind === "transport"
+            ? "I can't reach the build server right now."
+            : settled.kind === "queue-full"
+              ? "The build server is busy. Try again in a few seconds."
+              : settled.kind === "bad-request"
+                ? "Your request didn't make it through."
+                : "Something went wrong on the build server.",
+        detail: settled.message,
+      });
+      setView("landing");
+      return;
+    }
+    if (!settled.ok) {
+      setLoadError({
+        kind: settled.kind,
+        headline: settled.honest_gap.explanation,
+        detail:
+          settled.honest_gap.missing_capabilities.length > 0
+            ? `Missing: ${settled.honest_gap.missing_capabilities.join(", ")}`
+            : undefined,
+      });
+      setView("landing");
+      return;
+    }
+    const proj = pipelineToProject(settled.doc);
     setProject({ ...proj, prompt });
     setView("result");
   };
@@ -306,15 +381,21 @@ export default function App() {
       {view === "landing" && (
         <div className="view active">
           <LandingView
-            onSubmit={startBuild}
+            onSubmit={(p) => {
+              setLoadError(null);
+              startBuild(p);
+            }}
             onSeeExample={() => {
               const exampleText = "a robot arm that waves when something gets close";
               setPrompt(exampleText);
               const proj = pipelineToProject(loadDefaultFixture());
               setProject({ ...proj, prompt: exampleText });
+              setLoadError(null);
               setView("result");
             }}
             setHeaderCtaVisible={setHeaderCtaVisible}
+            loadError={loadError}
+            onRetry={prompt ? () => startBuild(prompt) : undefined}
           />
         </div>
       )}
