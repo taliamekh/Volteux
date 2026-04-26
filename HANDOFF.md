@@ -1,7 +1,9 @@
 # Volteux — Project Handoff / Context Snapshot
 
-**Last updated:** 2026-04-25 (mid-hackathon)
+**Last updated:** 2026-04-25 (mid-hackathon, full-production push)
 **Purpose:** Self-contained context dump for any new chat / new collaborator. Read this first if you've never touched the project, or if you're continuing in a new chat session.
+
+**SCOPE CHANGE (2026-04-25):** Original hackathon plan was "polished demo with mocked pipeline." **Talia escalated scope to FULL PRODUCTION by 9:30 AM** — real backend, real flash, deployed at volteux.com. See `HACKATHON-CHECKLIST.md` for the production checklist.
 
 ---
 
@@ -63,11 +65,14 @@ Two-person team, locked tracks (no swapping mid-stream):
 
 **Open in pipeline:** browser-direct flash spike (`avrgirl-arduino` + Web Serial / WebUSB) — Day 1-2 timeboxed, v0 keystone risk.
 
-### UI (Talia's track) — mockup done, code starting
+### UI (Talia's track) — React app working locally, production push in flight
 
-- HTML mockup at `mockups/ui-v1.html` — ~85% done visually, three views (Empty / Loading / Main success state)
-- React + Vite starter scaffolded at `../react-router-app/` (outside this repo for now; cleaned of shadcn-ui leftovers earlier in the session)
-- Real React app to be built in the hackathon sprint, ported from the mockup
+- HTML mockup at `mockups/ui-v1.html` is HISTORICAL REFERENCE only — design is locked, no longer iterated on.
+- **Live React app at `react-router-app/app/routes/home.tsx`** runs at http://localhost:5173 via `npm run dev`.
+- All 4 views (Empty / Loading / Main / Honest Gap) are wired with state machine.
+- Pipeline call is currently MOCKED against `repo/fixtures/uno-ultrasonic-servo.json` — needs to be replaced with real fetch to Kai's backend (per Vercel deploy + Vultr backend plan).
+- Flash is currently FAKE (setInterval progress bar) — needs to be replaced with real avrgirl-arduino + Web Serial.
+- **TO DO before production deploy:** move `react-router-app/` → `repo/frontend/` so Vercel auto-deploys on git push.
 
 ### Design decisions made (the visual identity)
 
@@ -213,33 +218,51 @@ If Talia hits her Claude Code usage limit and has to switch to a new chat:
 ### Step 1 — Paste this briefing into the new chat
 
 ```
-I'm Talia, working on Volteux (the AI Arduino starter-kit hackathon project).
+I'm Talia, UI/Frontend track owner of Volteux (AI-powered Arduino tool, MLH hackathon).
+I'm a mechanical engineer learning software — visual learner, prefer plain language, define jargon.
 
-Read these files in this order to get full context:
-1. C:/Users/talia/OneDrive/CODING/Volteux/repo/HANDOFF.md
-2. C:/Users/talia/OneDrive/CODING/Volteux/repo/HACKATHON-CHECKLIST.md
+Read these files IN THIS ORDER to get full context (do not skip):
+1. C:/Users/talia/OneDrive/CODING/Volteux/repo/HANDOFF.md (full project snapshot)
+2. C:/Users/talia/OneDrive/CODING/Volteux/repo/HACKATHON-CHECKLIST.md (production checklist with agent prompts)
 3. C:/Users/talia/OneDrive/CODING/Volteux/repo/CLAUDE.md
 4. C:/Users/talia/OneDrive/CODING/Volteux/repo/TODOS.md
-5. C:/Users/talia/OneDrive/CODING/Volteux/repo/mockups/ui-v1.html
 
-I am the UI/Frontend track owner (mechanical engineer learning software, visual learner, prefer plain language).
-Kai owns the pipeline track.
+CURRENT STATE: mid-hackathon, FULL PRODUCTION push targeting 9:30 AM deploy at volteux.com.
+- React app working at localhost:5173 (mocked pipeline + fake flash)
+- Backend: Kai is building real pipeline orchestrator + Vultr deploy
+- Frontend deploy target: Vercel (free), custom domain volteux.com (DNS on Cloudflare)
+- Real Arduino hardware on hand for live flash demo
+- $100 Vultr MLH credit (no credit card) — get gift code from MLH coach
 
-We are mid-12-hour-hackathon. The previous chat was working on: [LAST_ACTION].
-The next thing to do is: [NEXT_ACTION].
+Kai's track ownership covers what's in PART 2 of HACKATHON-CHECKLIST.md.
+My (Talia + Claude) track covers what's in PART 3.
 
-Background agents in flight: [LIST_TASK_IDS or "none"].
+WHAT TO DO RIGHT NOW (do these in order):
+1. Confirm you've read all the files
+2. Spawn the agents listed in PART 5 of HACKATHON-CHECKLIST.md in parallel — start with Agent A (Vercel deploy scout) and Agent D (error/fallback states), they don't depend on Kai
+3. Move react-router-app/ → repo/frontend/ so Vercel can auto-deploy on git push
+4. Update HACKATHON-CHECKLIST.md with [x] as items get done
 
-Now tell me where we are and what to do next.
+Background agents in flight from previous chat: [LIST_TASK_IDS or "none — all completed"].
+The previous chat just finished: [WHAT_WAS_LAST_DONE].
+
+Now confirm you've read the files and tell me your plan for the next 30 minutes.
 ```
 
 ### Step 2 — Fill in the bracketed parts
 
-Update `[LAST_ACTION]`, `[NEXT_ACTION]`, and `[LIST_TASK_IDS]` based on what was happening when the chat ended.
+Update `[LIST_TASK_IDS]` (likely "none — all completed" if you waited for prior agents) and `[WHAT_WAS_LAST_DONE]` based on the previous chat's state.
 
 ### Step 3 — Hand it off
 
 Paste, hit enter. The new Claude reads the docs, gets caught up in 30 seconds, picks up from where you left off.
+
+### Why this prompt is structured this way
+
+- It states YOU first (so the new Claude knows your background and how to talk to you)
+- It points at the checklist for the agent prompts (so the new Claude doesn't have to invent agents from scratch)
+- It tells the new Claude EXACTLY what to do first (spawn parallel agents) so no time is lost on planning
+- It uses bracketed slots only where you have unique context to provide
 
 ---
 
