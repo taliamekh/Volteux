@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { User } from "../types";
 
 interface SignInModalProps {
@@ -23,6 +23,19 @@ export default function SignInModal({ onClose, onAuth }: SignInModalProps) {
   const [busy, setBusy] = useState<BusyKind>(null);
   const [error, setError] = useState("");
 
+  // Track in-flight fake-auth timers so close (Esc / backdrop / X) cancels them
+  // instead of letting onAuth fire after the user dismissed the modal — see
+  // julik review "signin-modal-async-vs-cancel" (P1, no silent failures).
+  const authTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (authTimerRef.current !== null) {
+        window.clearTimeout(authTimerRef.current);
+        authTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -39,14 +52,16 @@ export default function SignInModal({ onClose, onAuth }: SignInModalProps) {
     }
     setError("");
     setBusy("email");
-    window.setTimeout(() => {
+    authTimerRef.current = window.setTimeout(() => {
+      authTimerRef.current = null;
       onAuth({ email: email.trim(), initials: initialsFor(email), provider: "email" });
     }, 700);
   };
 
   const oauth = (provider: "google" | "github") => {
     setBusy(provider);
-    window.setTimeout(() => {
+    authTimerRef.current = window.setTimeout(() => {
+      authTimerRef.current = null;
       const fakeEmail = provider === "google" ? "you@gmail.com" : "you@users.noreply.github.com";
       onAuth({ email: fakeEmail, initials: initialsFor(fakeEmail), provider });
     }, 900);

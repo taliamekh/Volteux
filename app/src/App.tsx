@@ -157,6 +157,14 @@ export default function App() {
     setView("landing");
     setPrompt("");
     setProject(null);
+    // Clear the URL hash so a reload from this state lands on the empty hero,
+    // not on the previous project the user just left. Also flip the loop
+    // guard so the project-change effect doesn't immediately re-write the
+    // hash from the now-null project (which it wouldn't, but be explicit).
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    restoredFromHashRef.current = true;
   };
 
   return (
