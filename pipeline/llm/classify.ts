@@ -88,13 +88,20 @@ import Anthropic, {
   APIConnectionError,
   APIError,
   APIUserAbortError,
-  AnthropicError,
 } from "@anthropic-ai/sdk";
-import { transformJSONSchema } from "@anthropic-ai/sdk/lib/transform-json-schema.js";
 import { z, type ZodIssue } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { ARCHETYPE_IDS } from "../../schemas/document.zod.ts";
 import { createAnthropicClient } from "./anthropic-client.ts";
+import {
+  extractMessage,
+  extractZodIssues,
+  isStructuredOutputParseError,
+  makeOutputFormat as makeStructuredOutputFormat,
+  transformJSONSchema,
+  type SdkUsage,
+  type StructuredOutputFormat,
+} from "./sdk-helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -285,81 +292,25 @@ const CLASSIFY_JSON_SCHEMA = transformJSONSchema(
 
 /**
  * Build the `output_config.format` shape the SDK expects for structured
- * output. Includes a `parse` method so `client.messages.parse` runs our
- * v3 schema's `safeParse` and surfaces its ZodIssues via the same
- * `AnthropicError` channel `zodOutputFormat` would.
- *
- * The SDK throws `AnthropicError("Failed to parse structured output: ...")`
- * when this `parse` throws. The `cause` field carries the original Zod
- * error so the catcher can extract `ZodIssue[]` for the failure result.
+ * output. Thin module-local wrapper around the shared `makeOutputFormat`
+ * in `sdk-helpers.ts`, parameterized with this module's Zod schema +
+ * pre-transformed wire schema.
  */
-function makeOutputFormat(): {
-  type: "json_schema";
-  schema: { [key: string]: unknown };
-  parse: (content: string) => IntentClassification;
-} {
-  return {
-    type: "json_schema",
-    schema: CLASSIFY_JSON_SCHEMA as { [key: string]: unknown },
-    parse: (content: string) => {
-      let raw: unknown;
-      try {
-        raw = JSON.parse(content);
-      } catch (err) {
-        const e = new Error(
-          `Failed to JSON.parse model output: ${(err as Error).message}`,
-        );
-        (e as Error & { cause?: unknown }).cause = err;
-        throw e;
-      }
-      const result = IntentClassificationSchema.safeParse(raw);
-      if (!result.success) {
-        const e = new Error(
-          `Zod validation failed: ${result.error.issues.length} issue(s)`,
-        );
-        (e as Error & { cause?: unknown }).cause = result.error;
-        throw e;
-      }
-      return result.data;
-    },
-  };
+function makeOutputFormat(): StructuredOutputFormat<IntentClassification> {
+  return makeStructuredOutputFormat(
+    IntentClassificationSchema,
+    CLASSIFY_JSON_SCHEMA as { [key: string]: unknown },
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Failure-kind mapping (SDK throw → kind literal)
 // ---------------------------------------------------------------------------
-
-/**
- * Detect whether a thrown value is the "JSON.parse failed" or
- * "Zod safeParse failed" path our `makeOutputFormat().parse` produces.
- * The SDK wraps these throws with `AnthropicError("Failed to parse
- * structured output: <inner.message>")`. We rely on the prefix.
- */
-function isStructuredOutputParseError(err: unknown): boolean {
-  if (err instanceof AnthropicError) {
-    return err.message.startsWith("Failed to parse structured output");
-  }
-  return false;
-}
-
-/**
- * Best-effort extraction of the ZodIssue array from an
- * `AnthropicError("Failed to parse structured output: ...")`. Mirrors
- * `extractZodIssues` in `pipeline/llm/generate.ts`.
- */
-function extractZodIssues(err: unknown): ReadonlyArray<ZodIssue> {
-  if (!(err instanceof Error)) return [];
-  const cause = (err as Error & { cause?: unknown }).cause;
-  if (cause === undefined || cause === null) return [];
-  const direct = (cause as { issues?: unknown }).issues;
-  if (Array.isArray(direct)) return direct as ReadonlyArray<ZodIssue>;
-  const causeOfCause = (cause as { cause?: unknown }).cause;
-  if (causeOfCause !== undefined && causeOfCause !== null) {
-    const inner = (causeOfCause as { issues?: unknown }).issues;
-    if (Array.isArray(inner)) return inner as ReadonlyArray<ZodIssue>;
-  }
-  return [];
-}
+//
+// `extractMessage`, `extractZodIssues`, `isStructuredOutputParseError`
+// live in `./sdk-helpers.ts` and are imported above. The kind-mapper
+// stays LOCAL because the failure-kind union differs from generate
+// (4 vs 5 literals).
 
 /**
  * Map an SDK throw to a `ClassifyFailureKind`. Distinct from the
@@ -385,21 +336,9 @@ function mapSdkErrorToKind(err: unknown): ClassifyFailureKind {
   return "sdk-error";
 }
 
-function extractMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
 // ---------------------------------------------------------------------------
 // Usage extraction
 // ---------------------------------------------------------------------------
-
-interface SdkUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number | null;
-  cache_read_input_tokens: number | null;
-}
 
 function toClassifyUsage(usage: SdkUsage): ClassifyUsage {
   return {

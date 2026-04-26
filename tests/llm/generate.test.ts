@@ -66,9 +66,9 @@ import { VolteuxProjectDocumentSchema } from "../../schemas/document.zod.ts";
 import {
   APIConnectionError,
   APIError,
-  APIUserAbortError,
   AnthropicError,
 } from "@anthropic-ai/sdk";
+import { makeDeps as buildDeps, type MockHandler, type MockSdk } from "./test-helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Fixture: a known-good VolteuxProjectDocument the mock SDK returns.
@@ -84,107 +84,25 @@ const CANONICAL_FIXTURE = await Bun.file(
 const parsedFixture = VolteuxProjectDocumentSchema.parse(CANONICAL_FIXTURE);
 
 // ---------------------------------------------------------------------------
-// Test SDK builder — minimal mock matching the parts generate.ts uses.
+// Test SDK builder — uses shared mock infra from `./test-helpers.ts`.
+// The per-suite shape thunked in here is the production `GenerateDeps`
+// minus its `client`; the helper wires the mock SDK into `client` for us.
 // ---------------------------------------------------------------------------
 
-interface MockUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number | null;
-  cache_read_input_tokens: number | null;
-}
-
-interface MockMessageResponse {
-  // The SDK calls outputFormat.parse(textBlock.text); we simulate that
-  // by exposing `parsed_output` directly and `content` for completeness.
-  parsed_output: unknown | null;
-  stop_reason: "end_turn" | "max_tokens" | "stop_sequence" | "tool_use" | null;
-  usage: MockUsage;
-  content: ReadonlyArray<{ type: "text"; text: string }>;
-}
-
-type MockHandler = (params: {
-  model: string;
-  max_tokens: number;
-  system: unknown;
-  messages: ReadonlyArray<{ role: "user" | "assistant"; content: unknown }>;
-  output_config?: { format?: unknown };
-}) =>
-  | MockMessageResponse
-  | Promise<MockMessageResponse>
-  | Error
-  | Promise<never>;
-
-interface MockClientCallLog {
-  model: string;
-  max_tokens: number;
-  system: unknown;
-  messages: ReadonlyArray<{ role: "user" | "assistant"; content: unknown }>;
-  output_config?: { format?: unknown };
-}
-
-interface MockSdk {
-  messages: {
-    parse: (params: unknown, opts?: { signal?: AbortSignal }) => Promise<unknown>;
-  };
-  __calls: MockClientCallLog[];
-}
-
-/**
- * Build a mock Anthropic-shaped client. Each call invokes the next
- * handler in the queue. If a handler returns a value with
- * `parsed_output`, that's a success path; if it throws, that's a
- * failure path.
- *
- * The mock simulates the SDK's structured-output `parse` step: when
- * the handler returns `{ ...response, parsed_output: rawObj }`, we run
- * the deps.outputFormat.parse over a stringified content block and
- * propagate the AnthropicError if it throws (matches real SDK behavior).
- */
-function makeMockSdk(handlers: MockHandler[]): MockSdk {
-  const queue = [...handlers];
-  const calls: MockClientCallLog[] = [];
-  return {
-    messages: {
-      parse: async (params: unknown, opts?: { signal?: AbortSignal }) => {
-        const p = params as MockClientCallLog;
-        calls.push(p);
-        const handler = queue.shift();
-        if (handler === undefined) {
-          throw new Error("mock SDK: no handler queued for this call");
-        }
-        // Simulate caller-cancellation BEFORE the handler runs.
-        if (opts?.signal?.aborted === true) {
-          throw new APIUserAbortError({ message: "aborted" });
-        }
-        const result = await handler(p);
-        if (result instanceof Error) throw result;
-        // Simulate the SDK's structured-output flow: if the response
-        // has `parsed_output: null` AND `output_config.format.parse`
-        // exists, we don't run it — but if `parsed_output` is a parsed
-        // object, we return it as-is (the real SDK ran .parse()
-        // successfully).
-        return result;
-      },
+function makeDeps(
+  handlers: MockHandler[],
+  overrides: Partial<GenerateDeps> = {},
+): { deps: GenerateDeps; sdk: MockSdk } {
+  return buildDeps<GenerateDeps>(
+    handlers,
+    {
+      systemPromptSource: "[mock system prompt]",
+      schemaPrimer: "[mock schema primer]",
+      model: "claude-sonnet-4-6",
+      maxTokens: 16000,
     },
-    __calls: calls,
-  };
-}
-
-function makeDeps(handlers: MockHandler[], overrides: Partial<GenerateDeps> = {}): {
-  deps: GenerateDeps;
-  sdk: MockSdk;
-} {
-  const sdk = makeMockSdk(handlers);
-  const deps: GenerateDeps = {
-    client: sdk as unknown as GenerateDeps["client"],
-    systemPromptSource: "[mock system prompt]",
-    schemaPrimer: "[mock schema primer]",
-    model: "claude-sonnet-4-6",
-    maxTokens: 16000,
-    ...overrides,
-  };
-  return { deps, sdk };
+    overrides,
+  );
 }
 
 // ---------------------------------------------------------------------------

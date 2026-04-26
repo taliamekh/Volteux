@@ -40,96 +40,27 @@ import {
 import {
   APIConnectionError,
   APIError,
-  APIUserAbortError,
   AnthropicError,
 } from "@anthropic-ai/sdk";
+import { makeDeps as buildDeps, type MockHandler, type MockSdk } from "./test-helpers.ts";
 
 // ---------------------------------------------------------------------------
-// Test SDK builder — minimal mock matching the parts classify.ts uses.
+// Test SDK builder — uses shared mock infra from `./test-helpers.ts`.
 // ---------------------------------------------------------------------------
-
-interface MockUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number | null;
-  cache_read_input_tokens: number | null;
-}
-
-interface MockMessageResponse {
-  parsed_output: unknown | null;
-  stop_reason: "end_turn" | "max_tokens" | "stop_sequence" | "tool_use" | null;
-  usage: MockUsage;
-  content: ReadonlyArray<{ type: "text"; text: string }>;
-}
-
-type MockHandler = (params: {
-  model: string;
-  max_tokens: number;
-  system: unknown;
-  messages: ReadonlyArray<{ role: "user" | "assistant"; content: unknown }>;
-  output_config?: { format?: unknown };
-}) =>
-  | MockMessageResponse
-  | Promise<MockMessageResponse>
-  | Error
-  | Promise<never>;
-
-interface MockClientCallLog {
-  model: string;
-  max_tokens: number;
-  system: unknown;
-  messages: ReadonlyArray<{ role: "user" | "assistant"; content: unknown }>;
-  output_config?: { format?: unknown };
-}
-
-interface MockSdk {
-  messages: {
-    parse: (params: unknown, opts?: { signal?: AbortSignal }) => Promise<unknown>;
-  };
-  __calls: MockClientCallLog[];
-}
-
-/**
- * Build a mock Anthropic-shaped client. Mirrors `makeMockSdk` in
- * `generate.test.ts`. Each call invokes the next handler in the queue.
- */
-function makeMockSdk(handlers: MockHandler[]): MockSdk {
-  const queue = [...handlers];
-  const calls: MockClientCallLog[] = [];
-  return {
-    messages: {
-      parse: async (params: unknown, opts?: { signal?: AbortSignal }) => {
-        const p = params as MockClientCallLog;
-        calls.push(p);
-        const handler = queue.shift();
-        if (handler === undefined) {
-          throw new Error("mock SDK: no handler queued for this call");
-        }
-        if (opts?.signal?.aborted === true) {
-          throw new APIUserAbortError({ message: "aborted" });
-        }
-        const result = await handler(p);
-        if (result instanceof Error) throw result;
-        return result;
-      },
-    },
-    __calls: calls,
-  };
-}
 
 function makeDeps(
   handlers: MockHandler[],
   overrides: Partial<ClassifyDeps> = {},
 ): { deps: ClassifyDeps; sdk: MockSdk } {
-  const sdk = makeMockSdk(handlers);
-  const deps: ClassifyDeps = {
-    client: sdk as unknown as ClassifyDeps["client"],
-    systemPromptSource: "[mock intent classifier system prompt]",
-    model: "claude-haiku-4-5",
-    maxTokens: 1024,
-    ...overrides,
-  };
-  return { deps, sdk };
+  return buildDeps<ClassifyDeps>(
+    handlers,
+    {
+      systemPromptSource: "[mock intent classifier system prompt]",
+      model: "claude-haiku-4-5",
+      maxTokens: 1024,
+    },
+    overrides,
+  );
 }
 
 // ---------------------------------------------------------------------------
