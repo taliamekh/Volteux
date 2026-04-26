@@ -47,6 +47,34 @@ export interface CompileGateValue {
   hex_b64: string;
   stderr: string;
   cache_hit: boolean;
+  /**
+   * Wall-clock duration of the gate call (request + server-side compile +
+   * response) in milliseconds. Cheap to populate (Date.now() around the
+   * fetch). Unit 9's trace writer emits this as `compile_call.latency_ms`
+   * so the eval harness (v0.5) and meta-harness proposer (v0.9) can
+   * detect prompt regressions that grow sketch complexity.
+   *
+   * W-002 telemetry surface.
+   */
+  latency_ms: number;
+  /**
+   * Decoded length of `hex_b64` in bytes. Proxy for sketch complexity;
+   * useful as a regression signal when the LLM's output grows.
+   * W-002.
+   */
+  hex_size_bytes: number;
+  /**
+   * The toolchain hash the server fingerprinted at boot. A cache_hit:true
+   * result with a different toolchain_version_hash than the orchestrator
+   * last saw is the signal that the server was rebuilt — Unit 9 can
+   * decide whether to invalidate any local cached state. The server
+   * exposes this on `/api/health` for cold detection too.
+   *
+   * Optional because the server response may omit it (e.g., a malformed
+   * 200 still carrying artifact_b64 — the gate prefers to surface what
+   * it has rather than fail open). W-002.
+   */
+  toolchain_version_hash?: string;
 }
 
 export type CompileGateFailureKind =
@@ -71,6 +99,9 @@ const SuccessResponseSchema = z
     artifact_kind: z.string().optional(),
     stderr: z.string().optional(),
     cache_hit: z.boolean().optional(),
+    /** Server emits this on every success response so the orchestrator
+     *  can detect cross-deploy toolchain changes. W-002. */
+    toolchain_version_hash: z.string().optional(),
   })
   .passthrough();
 
@@ -81,6 +112,8 @@ const ErrorResponseSchema = z
     message: z.string().optional(),
     reason: z.string().optional(),
     filename: z.string().optional(),
+    /** Present on `filename-allowlist` 400 — agent-switchable enum (W-001). */
+    rejection_kind: z.string().optional(),
     /** Present only on `bad-request` 400 from zValidator hook. */
     issues: z.array(z.unknown()).optional(),
     stderr: z.string().optional(),
@@ -139,6 +172,7 @@ export async function runCompileGate(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
 
   let response: Response;
   try {
@@ -251,14 +285,36 @@ export async function runCompileGate(
     };
   }
 
+  // hex_b64 length is 4*ceil(n/3); decoded bytes ≈ length * 3 / 4 minus
+  // padding. We compute exact decoded bytes via Buffer.from, but stay
+  // off the actual decode hot path on the cache-hit code branch.
+  const hex_size_bytes = decodedBase64Length(body.artifact_b64);
+
   return {
     ok: true,
     value: {
       hex_b64: body.artifact_b64,
       stderr: body.stderr ?? "",
       cache_hit: Boolean(body.cache_hit),
+      latency_ms: Date.now() - startedAt,
+      hex_size_bytes,
+      toolchain_version_hash: body.toolchain_version_hash,
     },
   };
+}
+
+/**
+ * Compute the decoded byte length of a base64 string without allocating a
+ * Buffer. base64 is 4 chars per 3 bytes; trailing `=` chars subtract
+ * decoded bytes. Cheap for the eval-harness telemetry surface (W-002).
+ */
+function decodedBase64Length(b64: string): number {
+  const len = b64.length;
+  if (len === 0) return 0;
+  let padding = 0;
+  if (b64.endsWith("==")) padding = 2;
+  else if (b64.endsWith("=")) padding = 1;
+  return Math.floor((len * 3) / 4) - padding;
 }
 
 /**

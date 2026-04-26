@@ -66,6 +66,49 @@ describe("runCompileGate — happy path", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.cache_hit).toBe(true);
   });
+
+  // W-002 — telemetry surface for Unit 9's trace writer.
+  test("populates latency_ms, hex_size_bytes, toolchain_version_hash on success", async () => {
+    const fetchImpl = fakeFetch(() =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          artifact_b64: "aGVsbG8=", // decodes to "hello" (5 bytes)
+          cache_hit: false,
+          toolchain_version_hash: "abc123",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const result = await runCompileGate(validReq, {
+      baseUrl: "http://test",
+      secret: "x".repeat(32),
+      fetch: fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.latency_ms).toBeGreaterThanOrEqual(0);
+      // 8-char base64 with one padding char → 5 decoded bytes.
+      expect(result.value.hex_size_bytes).toBe(5);
+      expect(result.value.toolchain_version_hash).toBe("abc123");
+    }
+  });
+
+  test("toolchain_version_hash is undefined when server omits it (gate stays liberal)", async () => {
+    const fetchImpl = fakeFetch(() =>
+      new Response(
+        JSON.stringify({ ok: true, artifact_b64: "aGV4", cache_hit: false }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const result = await runCompileGate(validReq, {
+      baseUrl: "http://test",
+      secret: "x".repeat(32),
+      fetch: fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.toolchain_version_hash).toBeUndefined();
+  });
 });
 
 describe("runCompileGate — failure kinds (discriminated union)", () => {

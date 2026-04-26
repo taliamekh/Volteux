@@ -119,81 +119,101 @@ describe("validateAdditionalFileName (the predicate the Compile API also imports
     expect(validateAdditionalFileName("a.b.ino")).toBeNull();
   });
 
-  test("rejects empty string with a clear reason", () => {
-    expect(validateAdditionalFileName("")).toBe("empty filename");
+  test("rejects empty string with a clear reason and kind", () => {
+    expect(validateAdditionalFileName("")).toEqual({
+      kind: "empty",
+      reason: "empty filename",
+    });
   });
 
-  test("rejects null byte (regardless of position)", () => {
-    expect(validateAdditionalFileName("sketch\0.ino")).toBe("null byte in filename");
+  test("rejects null byte (regardless of position) with kind:'null-byte'", () => {
+    expect(validateAdditionalFileName("sketch\0.ino")).toEqual({
+      kind: "null-byte",
+      reason: "null byte in filename",
+    });
   });
 
   // ADV-003 — consecutive dots: previously dead code in `filenameViolationReason`
   // because the old regex accepted `test..h`, so the post-regex `..` check was
   // never reached. Now the `..` check runs as a primary check before the regex.
-  test("rejects consecutive dots — `test..h` (ADV-003)", () => {
-    expect(validateAdditionalFileName("test..h")).toBe(
-      "consecutive dots not allowed (path traversal or extension obfuscation)",
-    );
+  test("rejects consecutive dots — `test..h` (ADV-003) with kind:'consecutive-dots'", () => {
+    expect(validateAdditionalFileName("test..h")).toEqual({
+      kind: "consecutive-dots",
+      reason:
+        "consecutive dots not allowed (path traversal or extension obfuscation)",
+    });
   });
 
   test("rejects consecutive dots — `..hidden.ino` (ADV-003)", () => {
-    expect(validateAdditionalFileName("..hidden.ino")).toBe(
-      "consecutive dots not allowed (path traversal or extension obfuscation)",
+    expect(validateAdditionalFileName("..hidden.ino")?.kind).toBe(
+      "consecutive-dots",
     );
   });
 
   test("rejects path traversal `../etc/passwd` (the consecutive-dot check fires first, which is fine)", () => {
-    // The reason message is the consecutive-dot reason; either reason is
-    // acceptable here — the policy is fail-closed and the user-facing
-    // message still names "..". The rejection itself is the contract.
-    expect(validateAdditionalFileName("../etc/passwd")).not.toBeNull();
-  });
-
-  test("rejects path separators with a clear reason", () => {
-    expect(validateAdditionalFileName("sub/foo.ino")).toBe(
-      "path separators not allowed (use a flat filename)",
-    );
-    expect(validateAdditionalFileName("sub\\foo.ino")).toBe(
-      "path separators not allowed (use a flat filename)",
+    // The rejection class is "consecutive-dots" — the path-traversal
+    // pattern always contains "..", so the primary check fires first.
+    expect(validateAdditionalFileName("../etc/passwd")?.kind).toBe(
+      "consecutive-dots",
     );
   });
 
-  test("rejects absolute path `/etc/passwd` with a path-separator reason (separator check fires first)", () => {
-    // Either reason is acceptable; the rejection itself is the contract.
-    expect(validateAdditionalFileName("/etc/passwd")).not.toBeNull();
+  test("rejects path separators with kind:'path-separator'", () => {
+    expect(validateAdditionalFileName("sub/foo.ino")).toEqual({
+      kind: "path-separator",
+      reason: "path separators not allowed (use a flat filename)",
+    });
+    expect(validateAdditionalFileName("sub\\foo.ino")).toEqual({
+      kind: "path-separator",
+      reason: "path separators not allowed (use a flat filename)",
+    });
+  });
+
+  test("rejects absolute path `/etc/passwd` with kind:'path-separator' (separator check fires first)", () => {
+    expect(validateAdditionalFileName("/etc/passwd")?.kind).toBe(
+      "path-separator",
+    );
   });
 
   // SEC-002 — leading-dash filenames could become CLI flag injections if
   // arduino-cli were ever invoked with shell interpolation.
-  test("rejects leading-dash `-flag.h` (SEC-002)", () => {
-    const reason = validateAdditionalFileName("-flag.h");
-    expect(reason).not.toBeNull();
-    expect(reason).toContain("does not match");
+  test("rejects leading-dash `-flag.h` (SEC-002) with kind:'bad-extension'", () => {
+    const rejection = validateAdditionalFileName("-flag.h");
+    expect(rejection).not.toBeNull();
+    expect(rejection?.kind).toBe("bad-extension");
+    expect(rejection?.reason).toContain("does not match");
   });
 
   test("rejects double-dash `--no-color.ino` (SEC-002)", () => {
-    const reason = validateAdditionalFileName("--no-color.ino");
-    expect(reason).not.toBeNull();
-    expect(reason).toContain("does not match");
+    const rejection = validateAdditionalFileName("--no-color.ino");
+    expect(rejection?.kind).toBe("bad-extension");
   });
 
   // Sandbox bypass surface (arduino-cli #758): each is rejected by the
   // extension check (none ends in .ino|.h|.cpp|.c). These tests document
   // *why* the extension constraint must not be relaxed.
   test("rejects sandbox bypass: arduino-cli.yaml (#758)", () => {
-    expect(validateAdditionalFileName("arduino-cli.yaml")).not.toBeNull();
+    expect(validateAdditionalFileName("arduino-cli.yaml")?.kind).toBe(
+      "bad-extension",
+    );
   });
 
   test("rejects sandbox bypass: sketch.json (#758)", () => {
-    expect(validateAdditionalFileName("sketch.json")).not.toBeNull();
+    expect(validateAdditionalFileName("sketch.json")?.kind).toBe(
+      "bad-extension",
+    );
   });
 
   test("rejects sandbox bypass: library.properties (#758)", () => {
-    expect(validateAdditionalFileName("library.properties")).not.toBeNull();
+    expect(validateAdditionalFileName("library.properties")?.kind).toBe(
+      "bad-extension",
+    );
   });
 
   test("rejects sandbox bypass: platform.txt (#758)", () => {
-    expect(validateAdditionalFileName("platform.txt")).not.toBeNull();
+    expect(validateAdditionalFileName("platform.txt")?.kind).toBe(
+      "bad-extension",
+    );
   });
 
   test("returns null for legitimate boundary case `a.b.ino` (single dots in stem)", () => {
@@ -243,7 +263,7 @@ describe("validateAdditionalFileName — predicate parity at the server's call s
     ];
 
     for (const filename of inputs) {
-      const directReason = validateAdditionalFileName(filename);
+      const direct = validateAdditionalFileName(filename);
       const result = await createPerRequestSketchDir({
         main_ino: "void setup(){}\nvoid loop(){}",
         additional_files: { [filename]: "x" },
@@ -255,11 +275,12 @@ describe("validateAdditionalFileName — predicate parity at the server's call s
         if (!result.ok) {
           expect(result.error.kind).toBe("filename-allowlist");
           expect(result.error.filename).toBe(filename);
+          expect(result.error.rejection_kind).toBe("reserved-name");
         }
         continue;
       }
 
-      if (directReason === null) {
+      if (direct === null) {
         expect(result.ok).toBe(true);
         if (result.ok) await result.handle.cleanup();
       } else {
@@ -267,7 +288,8 @@ describe("validateAdditionalFileName — predicate parity at the server's call s
         if (!result.ok) {
           expect(result.error.kind).toBe("filename-allowlist");
           expect(result.error.filename).toBe(filename);
-          expect(result.error.reason).toBe(directReason);
+          expect(result.error.reason).toBe(direct.reason);
+          expect(result.error.rejection_kind).toBe(direct.kind);
         }
       }
     }

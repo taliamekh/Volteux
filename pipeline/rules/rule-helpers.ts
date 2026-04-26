@@ -1,25 +1,39 @@
 /**
  * Shared helpers for archetype-1 rules.
  *
- * Most rules walk `doc.connections[]` and need to dereference each
- * endpoint to its registry entry + pin metadata. The triplet
+ * Two helpers, two distinct call patterns:
  *
- *   doc.components.find(c => c.id === endpoint.component_id)
- *     → lookupBySku(component.sku)
- *     → entry.pin_metadata.find(p => p.label === endpoint.pin_label)
+ *   1. `resolveEndpoint(doc, endpoint)` — for CONNECTION-TRAVERSAL rules
+ *      that walk `doc.connections[]` and need to dereference each
+ *      endpoint to {component, entry, pin}. Collapses the three-step
+ *      lookup triplet (find → lookupBySku → find-pin) that appeared
+ *      verbatim across many rule files (M-002 in the /ce:review pass).
  *
- * appeared verbatim across 8+ rule files (M-002 in the /ce:review pass).
- * `resolveEndpoint` collapses it to one pure function so the rule fixes
- * for COR-002 and COR-003 can be expressed as small predicates over the
- * resolved endpoint rather than rewritten lookup boilerplate.
+ *   2. `resolveComponent(doc, component_id)` — for connection-traversal
+ *      rules that need only {component, entry} for one side WITHOUT a
+ *      pin label (e.g., the "I just need to know if this is the MCU"
+ *      check). Same backing logic as `resolveEndpoint` minus the pin
+ *      lookup.
  *
- * Pure function. No side effects. Registry is passed as a parameter so
+ * Migration policy (resolves M-001 from the v0.1-pipeline-io review):
+ *   - Connection-traversal rules use `resolveEndpoint` —
+ *     voltage-match, sensor-trig-output-pin, sensor-echo-input-pin,
+ *     current-budget, and any future rule that walks `connections[]`.
+ *   - Pure component-traversal rules (no-floating-pins, etc.) keep their
+ *     direct `lookupBySku(c.sku)` call. They have no triplet
+ *     boilerplate to collapse — `lookupBySku` already IS the helper —
+ *     so wrapping it would add lines, not reduce them.
+ *
+ * Pure functions. No side effects. Registry is passed as a parameter so
  * tests can stub a different registry (mirrors the cross-consistency
  * gate's signature). Production callers omit and the canonical registry
  * is used.
  */
 
-import type { VolteuxProjectDocument } from "../../schemas/document.zod.ts";
+import type {
+  VolteuxPin,
+  VolteuxProjectDocument,
+} from "../../schemas/document.zod.ts";
 import {
   COMPONENTS,
   type ComponentRegistryEntry,
@@ -29,8 +43,13 @@ import {
 /** A component instance from the runtime document (`{id, sku, quantity}`). */
 export type ComponentInstance = VolteuxProjectDocument["components"][number];
 
-/** Endpoint shape used in connections — `{component_id, pin_label}`. */
-export type Endpoint = { component_id: string; pin_label: string };
+/**
+ * Endpoint shape used in connections — `{component_id, pin_label}`. Aliased
+ * from `VolteuxPin` (derived from PinSchema in `schemas/document.zod.ts`)
+ * so a future schema change to the pin shape automatically widens this
+ * helper rather than letting the two definitions silently drift.
+ */
+export type Endpoint = VolteuxPin;
 
 /** Registry shape the helper accepts (mirrors `cross-consistency.ts`). */
 export type ComponentRegistry = Readonly<
@@ -69,10 +88,38 @@ export function resolveEndpoint(
   endpoint: Endpoint,
   registry: ComponentRegistry = COMPONENTS,
 ): ResolvedEndpoint | null {
-  const component = doc.components.find((c) => c.id === endpoint.component_id);
+  const resolved = resolveComponent(doc, endpoint.component_id, registry);
+  if (!resolved) return null;
+  const pin = resolved.entry.pin_metadata.find(
+    (p) => p.label === endpoint.pin_label,
+  );
+  return { ...resolved, pin };
+}
+
+/**
+ * Resolve a component instance + registry entry by `component_id`.
+ * Returns `null` if the component is not in `doc.components` or its SKU
+ * is not in the registry — both caught by cross-consistency checks (b)
+ * and (g), so a rule that hits `null` is operating on an
+ * already-malformed document and should silently skip the iteration.
+ *
+ * Used by connection-traversal rules that need only {component, entry}
+ * without a pin label (e.g., current-budget needs to confirm one side
+ * is the MCU before keying off the pin label literally).
+ */
+export interface ResolvedComponent {
+  component: ComponentInstance;
+  entry: ComponentRegistryEntry;
+}
+
+export function resolveComponent(
+  doc: VolteuxProjectDocument,
+  componentId: string,
+  registry: ComponentRegistry = COMPONENTS,
+): ResolvedComponent | null {
+  const component = doc.components.find((c) => c.id === componentId);
   if (!component) return null;
   const entry = registry[component.sku];
   if (!entry) return null;
-  const pin = entry.pin_metadata.find((p) => p.label === endpoint.pin_label);
-  return { component, entry, pin };
+  return { component, entry };
 }

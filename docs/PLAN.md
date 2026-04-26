@@ -90,13 +90,46 @@ Validated JSON  →  shipped to UI
 **Where arduino-cli runs:** A small always-on VPS, not serverless. Cloudflare Workers and Vercel functions can't host the AVR / ESP / Pico toolchains — no native execution, no persistent filesystem, no `gcc`. **v0 sizing**: ~4GB RAM, 30GB disk, 2 vCPU. The CX11 (2GB) won't fit even just `avr-gcc` plus `arduino-cli` cores once Servo, NeoPixel, etc. are pre-installed. Hetzner CX21 (~€6/mo, 4GB) or Fly.io shared-cpu-2x (4GB, ~$5/mo) is the floor. **v1.5 sizing**: when ESP and Pico toolchains land, peak compile RAM hits ~1.5-2GB and the disk image grows to 8-12GB; bump to ~8GB RAM / 50GB disk or split into per-board containers.
 
 **Compile API contract.**
+
+> **2026-04-25 update — joint signoff Kai + Talia:** the contract below now reflects the v0.1-pipeline-io implementation and the AC-001/AC-002/AC-003/AC-004 normalizations from the `/ce:review` pass on `feat/v01-pipeline-io`. The previous shape underspecified the success response (no `cache_hit`, no `toolchain_version_hash`) and didn't standardize the error envelope. This is now the canonical shape; the UI track should consume from this section, not from older revisions.
+
 ```
 POST /api/compile
-Headers: { Authorization: "Bearer <session-token>" }
+Headers: { Authorization: "Bearer <COMPILE_API_SECRET>" }
 Body:    { fqbn, sketch_main_ino, additional_files?, libraries: [allowlisted names] }
-Response: { ok: bool, stderr: string, artifact_b64?: string, artifact_kind: "hex" | "uf2" | "bin" }
 ```
-Auth/rate limit: a per-IP token bucket (10 compiles / 5 min) plus a Turnstile challenge before the demo URL is ever shared. v0 accepts the abuse risk because the URL is unlisted; revisit before any public link.
+
+**Success response (200, ok=true):**
+```
+{
+  ok: true,
+  artifact_b64: string,                     // base64-encoded .hex
+  artifact_kind: "hex" | "uf2" | "bin",     // v0.1 always "hex" (Uno only)
+  stderr: string,                           // verbatim arduino-cli stderr (informational)
+  cache_hit: boolean,                       // true if served from /var/cache/volteux
+  toolchain_version_hash: string            // sha256(version + core list + lib list); detect cross-deploy toolchain changes
+}
+```
+
+**Error responses (uniform `{ok: false, error, ...}` envelope; discriminator is `ok`, never `success`):**
+```
+400 → { ok: false, error: "bad-request",         message, issues: ZodIssue[] }     // request body failed schema (zValidator)
+400 → { ok: false, error: "filename-allowlist",  filename, reason, rejection_kind: "empty"|"null-byte"|"consecutive-dots"|"path-separator"|"bad-extension"|"reserved-name" }
+401 → (HTTPException; bearer-auth default body)                                     // missing or wrong Authorization header
+429 → { ok: false, error: "rate-limit",          message }                          // 10 req / 60s per secret window
+503 → { ok: false, error: "queue-full",          message }, headers: { Retry-After: "5" }   // pLimit queue depth ≥ 6
+200 → { ok: false, error: "compile-error",       stderr }                           // arduino-cli compiled but exited non-zero; stderr is the gcc message
+500 → { ok: false, error: "internal-error",      message: "internal server error" } // any unhandled exception; never echoes the underlying error
+```
+
+**Health endpoint:**
+```
+GET /api/health
+200 → { ok: true,  toolchain_version_hash: string }    // healthy
+503 → { ok: false, error: "degraded", toolchain_version_hash: string }   // server up but degraded (cache unwritable, AVR core absent at runtime)
+```
+
+Auth: per-environment 32-byte minimum bearer secret (server refuses to start otherwise). v0.1 ships an in-process token bucket (10 compiles / 60s per secret) plus a queue-depth cap (`pLimit(2)` with a 6-deep ceiling — bursts past that get 503 + Retry-After rather than building a graveyard queue past the client's 30s timeout). v0.2 deploy adds per-IP keying and Turnstile before any public link.
 
 **Library allowlist.** A closed set of libraries pre-installed on the VPS at image-build time. Reject any sketch whose `libraries[]` references something outside the allowlist before invoking the compiler. v0 allowlist (one or two per archetype):
 - archetype 1: `Servo`

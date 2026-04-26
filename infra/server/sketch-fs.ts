@@ -20,7 +20,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateAdditionalFileName } from "../../pipeline/gates/library-allowlist.ts";
+import {
+  validateAdditionalFileName,
+  type FilenameRejectionKind,
+} from "../../pipeline/gates/library-allowlist.ts";
 
 /** The fixed sketch directory name arduino-cli expects. */
 const SKETCH_DIR_NAME = "sketch";
@@ -36,6 +39,8 @@ export type SketchDirError = {
   kind: "filename-allowlist";
   filename: string;
   reason: string;
+  /** Structured rejection class — agent callers switch on this; W-001. */
+  rejection_kind: FilenameRejectionKind | "reserved-name";
 };
 
 export interface SketchDirHandle {
@@ -60,11 +65,16 @@ export async function createPerRequestSketchDir(
 
   // Validate all filenames first (cheap; fail closed before disk I/O).
   for (const filename of Object.keys(additional)) {
-    const reason = validateAdditionalFileName(filename);
-    if (reason !== null) {
+    const rejection = validateAdditionalFileName(filename);
+    if (rejection !== null) {
       return {
         ok: false,
-        error: { kind: "filename-allowlist", filename, reason },
+        error: {
+          kind: "filename-allowlist",
+          filename,
+          reason: rejection.reason,
+          rejection_kind: rejection.kind,
+        },
       };
     }
     // ADV-002 — reject any additional_files key that would overwrite the main
@@ -79,6 +89,7 @@ export async function createPerRequestSketchDir(
           kind: "filename-allowlist",
           filename,
           reason: `reserved name: would overwrite the main sketch file (${MAIN_SKETCH_FILE})`,
+          rejection_kind: "reserved-name",
         },
       };
     }

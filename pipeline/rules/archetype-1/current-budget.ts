@@ -8,11 +8,15 @@
  *
  * Datasheet: Arduino Uno R3 board specs say 500mA max from the 5V rail
  * when USB-powered (PTC fuse trips above this).
+ *
+ * M-001 migration: this rule walks `connections[]` and used the same
+ * triplet (find → lookupBySku → find-pin) `resolveEndpoint` was extracted
+ * for. Now uses the helper.
  */
 
 import type { VolteuxProjectDocument } from "../../../schemas/document.zod.ts";
 import type { Rule, RuleResult } from "../../types.ts";
-import { lookupBySku } from "../../../components/registry.ts";
+import { resolveEndpoint } from "../rule-helpers.ts";
 
 const UNO_5V_RAIL_BUDGET_MA = 500;
 const WARNING_THRESHOLD = 0.8; // warn at 80% of budget
@@ -34,30 +38,18 @@ export const currentBudgetRule: Rule<VolteuxProjectDocument> = {
         [conn.from, conn.to],
         [conn.to, conn.from],
       ] as const) {
-        const component = doc.components.find(
-          (c) => c.id === endpoint.component_id,
-        );
-        if (!component) continue;
-        const entry = lookupBySku(component.sku);
-        if (!entry || entry.type !== "mcu") continue;
+        const supply = resolveEndpoint(doc, endpoint);
+        if (!supply || supply.entry.type !== "mcu") continue;
         if (endpoint.pin_label !== "5V") continue;
 
         // Other endpoint draws from the 5V rail
-        const otherComponent = doc.components.find(
-          (c) => c.id === otherEndpoint.component_id,
-        );
-        if (!otherComponent) continue;
-        const otherEntry =
-          lookupBySku(otherComponent.sku);
-        if (!otherEntry) continue;
-        const otherPin = otherEntry.pin_metadata.find(
-          (p) => p.label === otherEndpoint.pin_label,
-        );
-        if (!otherPin || otherPin.direction !== "power_in") continue;
-        if (otherPin.current_ma !== undefined) {
-          totalCurrentMa += otherPin.current_ma;
+        const consumer = resolveEndpoint(doc, otherEndpoint);
+        if (!consumer || !consumer.pin) continue;
+        if (consumer.pin.direction !== "power_in") continue;
+        if (consumer.pin.current_ma !== undefined) {
+          totalCurrentMa += consumer.pin.current_ma;
           sources.push(
-            `${otherComponent.id} (${otherEntry.name}) ${otherPin.current_ma}mA`,
+            `${otherEndpoint.component_id} (${consumer.entry.name}) ${consumer.pin.current_ma}mA`,
           );
         }
       }

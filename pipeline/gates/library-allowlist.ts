@@ -125,17 +125,78 @@ export const ADDITIONAL_FILE_NAME_REGEX =
  * On regex failure, the reason names the regex source so future contributors
  * can grep `ADDITIONAL_FILE_NAME_REGEX` and find this site.
  */
-export function validateAdditionalFileName(name: string): string | null {
-  if (name === "") return "empty filename";
-  if (name.includes("\0")) return "null byte in filename";
-  if (name.includes("..")) return "consecutive dots not allowed (path traversal or extension obfuscation)";
+/**
+ * Discriminated rejection class. Agent callers (Unit 9 orchestrator,
+ * eval harness, smoke script) switch on `kind` rather than parsing the
+ * free-text `reason` string. Closes W-001 from the v0.1-pipeline-io
+ * review pass.
+ *
+ *   `empty`             — the name is the empty string
+ *   `null-byte`         — POSIX path string with a literal NUL byte
+ *   `consecutive-dots`  — `..` anywhere in the name (path traversal /
+ *                         extension obfuscation)
+ *   `path-separator`    — `/` or `\` in the name (flat names only)
+ *   `bad-extension`     — fails the regex (leading dash, leading dot,
+ *                         non-allowed extension, non-alphanumeric chars)
+ */
+export type FilenameRejectionKind =
+  | "empty"
+  | "null-byte"
+  | "consecutive-dots"
+  | "path-separator"
+  | "bad-extension";
+
+/**
+ * Structured result of a filename allowlist check.
+ *
+ * `kind` is the agent-switchable enum; `reason` is the human-readable
+ * message preserved for log surfaces and beginner-facing error copy.
+ */
+export interface FilenameRejection {
+  kind: FilenameRejectionKind;
+  reason: string;
+}
+
+/**
+ * Validate an `additional_files` key against the allowlist.
+ *
+ * Returns `null` on pass, or a {kind, reason} pair on fail. Both fields
+ * are populated; agent callers should switch on `kind` while log/UI
+ * surfaces should display `reason`.
+ *
+ * Layered checks (each fails closed):
+ *   1. Empty string
+ *   2. Null byte
+ *   3. Consecutive dots (`..`) — primary check; ADV-003 fix
+ *   4. Path separator (`/` or `\`)
+ *   5. Regex (alphanumeric/underscore-led, allowed extension; SEC-002 fix)
+ */
+export function validateAdditionalFileName(
+  name: string,
+): FilenameRejection | null {
+  if (name === "")
+    return { kind: "empty", reason: "empty filename" };
+  if (name.includes("\0"))
+    return { kind: "null-byte", reason: "null byte in filename" };
+  if (name.includes(".."))
+    return {
+      kind: "consecutive-dots",
+      reason:
+        "consecutive dots not allowed (path traversal or extension obfuscation)",
+    };
   if (name.includes("/") || name.includes("\\"))
-    return "path separators not allowed (use a flat filename)";
+    return {
+      kind: "path-separator",
+      reason: "path separators not allowed (use a flat filename)",
+    };
   // Note: a `startsWith("/")` check used to live here as a "leading slash"
   // guard but it is unreachable — any name beginning with "/" contains "/"
   // and is caught by the path-separator check above.
   if (!ADDITIONAL_FILE_NAME_REGEX.test(name))
-    return `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`;
+    return {
+      kind: "bad-extension",
+      reason: `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`,
+    };
   return null;
 }
 
@@ -216,6 +277,8 @@ export type AllowlistViolation =
       kind: "filename-allowlist";
       filename: string;
       reason: string;
+      /** The structured rejection class (closes W-001 from review). */
+      rejection_kind: FilenameRejectionKind;
     }
   | {
       kind: "library-not-in-allowlist";
@@ -256,12 +319,13 @@ export function runAllowlistChecks(
 
   // (1) Filename allowlist for additional_files keys
   for (const filename of Object.keys(input.additional_files)) {
-    const reason = validateAdditionalFileName(filename);
-    if (reason !== null) {
+    const rejection = validateAdditionalFileName(filename);
+    if (rejection !== null) {
       violations.push({
         kind: "filename-allowlist",
         filename,
-        reason,
+        reason: rejection.reason,
+        rejection_kind: rejection.kind,
       });
     }
   }
