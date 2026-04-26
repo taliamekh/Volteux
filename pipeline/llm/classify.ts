@@ -112,6 +112,15 @@ const DEFAULT_MAX_TOKENS = 1024;
 const MAX_PROMPT_CHARS = 5000;
 const SYSTEM_PROMPT_PATH = "pipeline/prompts/intent-classifier-system.md";
 
+/**
+ * Per-call SDK timeout. Haiku 4.5 typical end-to-end lands well under
+ * 5s; 60s is generous (matches `generate.ts`) but still well below the
+ * SDK's 600s default — long enough to absorb a single transient
+ * slowdown, short enough that a stuck request surfaces as
+ * `transport`/`abort` rather than blocking the orchestrator.
+ */
+const SDK_TIMEOUT_MS = 60_000;
+
 // ---------------------------------------------------------------------------
 // Public schema
 // ---------------------------------------------------------------------------
@@ -360,6 +369,12 @@ function toClassifyUsage(usage: SdkUsage): ClassifyUsage {
  * Production callers use `classify()` which lazily wraps
  * `defaultClassifyDeps()`; tests call this directly with mock deps.
  *
+ * **Closure call shape.** The returned closure accepts ONLY
+ * `{signal?}` per call — there is no per-call `deps` override. To swap
+ * deps (e.g., a different model name in a smoke script), use the
+ * `classify()` convenience wrapper's `opts.deps` partial-merge instead;
+ * that path constructs a fresh `buildClassifier(...)` per call.
+ *
  * **No `cache_control` is set anywhere.** The system prompt is passed
  * as a single string (not a multi-block array) and the messages array
  * carries only the user prompt. Any future contributor adding
@@ -396,8 +411,8 @@ export function buildClassifier(
           output_config: { format: outputFormat },
         },
         innerOpts.signal !== undefined
-          ? { signal: innerOpts.signal }
-          : undefined,
+          ? { signal: innerOpts.signal, timeout: SDK_TIMEOUT_MS }
+          : { timeout: SDK_TIMEOUT_MS },
       );
 
       if (response.parsed_output !== null) {

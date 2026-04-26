@@ -112,6 +112,15 @@ const MAX_PROMPT_CHARS = 5000;
 const SYSTEM_PROMPT_PATH = "pipeline/prompts/archetype-1-system.md";
 const FEWSHOT_PROMPT_PATH = "pipeline/prompts/archetype-1-fewshot.md";
 
+/**
+ * Per-call SDK timeout. Sonnet 4.6 typical end-to-end + cache write
+ * lands in 5-10s; 60s is generous but still well below the SDK's
+ * 600s default — long enough to absorb a single transient slowdown,
+ * short enough that a stuck request surfaces as `transport`/`abort`
+ * rather than blocking the orchestrator (Unit 9) for minutes.
+ */
+const SDK_TIMEOUT_MS = 60_000;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -510,6 +519,15 @@ function toGenerateUsage(usage: SdkUsage): GenerateUsage {
  *
  * Production callers use `generate()` which lazily wraps
  * `defaultGenerateDeps()`; tests call this directly with mock deps.
+ *
+ * **Closure call shape.** The returned closure accepts ONLY
+ * `{signal?}` per call — there is no per-call `deps` override. To swap
+ * deps (e.g., a different model name in a smoke script), use the
+ * `generate()` convenience wrapper's `opts.deps` partial-merge instead;
+ * that path constructs a fresh `buildGenerator(...)` per call. Mixing
+ * the two would bind half a request's behaviour to the closed-over
+ * deps and the other half to a runtime override, which is the wrong
+ * mental model.
  */
 export function buildGenerator(
   deps: GenerateDeps,
@@ -543,8 +561,8 @@ export function buildGenerator(
           output_config: { format: outputFormat },
         },
         innerOpts.signal !== undefined
-          ? { signal: innerOpts.signal }
-          : undefined,
+          ? { signal: innerOpts.signal, timeout: SDK_TIMEOUT_MS }
+          : { timeout: SDK_TIMEOUT_MS },
       );
 
       // Truncation: stop_reason === "max_tokens" with no parsed_output.
@@ -623,8 +641,8 @@ export function buildGenerator(
           output_config: { format: outputFormat },
         },
         innerOpts.signal !== undefined
-          ? { signal: innerOpts.signal }
-          : undefined,
+          ? { signal: innerOpts.signal, timeout: SDK_TIMEOUT_MS }
+          : { timeout: SDK_TIMEOUT_MS },
       );
 
       if (
