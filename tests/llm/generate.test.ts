@@ -471,6 +471,235 @@ describe("buildGenerator — abort", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Defensive branches: response with no parsed_output (NOT max_tokens).
+//
+// The SDK should normally throw an AnthropicError when structured-output
+// parsing fails; the `parsed_output: null && stop_reason !== "max_tokens"`
+// branch only fires if the SDK ever silently returns no parsed_output
+// without throwing. The branch exists as a safety net — surface as
+// `sdk-error` rather than confidently crash. These tests pin that
+// behaviour so a refactor that drops the defensive case is caught.
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — defensive: parsed_output=null on attempt 1 (stop_reason !== max_tokens)", () => {
+  test("returns kind:'sdk-error' with stop_reason carried in errors[]", async () => {
+    const { deps, sdk } = makeDeps([
+      () => ({
+        parsed_output: null,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "" }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("sdk-error");
+      expect(result.severity).toBe("red");
+      expect(result.errors[0]).toContain("stop_reason=end_turn");
+    }
+    // No retry — defensive sdk-error returns immediately.
+    expect(sdk.__calls.length).toBe(1);
+  });
+});
+
+describe("buildGenerator — defensive: parsed_output=null on attempt 2 (auto-repair retry)", () => {
+  test("attempt-1 zod throw → attempt-2 returns parsed_output:null with stop_reason 'end_turn' → kind:'sdk-error'", async () => {
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["board"],
+        message: "Required",
+        expected: "object",
+        received: "undefined",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed: 1 issue(s)") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const sdkThrow = new AnthropicError(
+      `Failed to parse structured output: ${inner.message}`,
+    ) as AnthropicError & { cause?: unknown };
+    sdkThrow.cause = inner;
+
+    const { deps, sdk } = makeDeps([
+      () => sdkThrow,
+      () => ({
+        parsed_output: null,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 2500,
+        },
+        content: [{ type: "text", text: "" }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("sdk-error");
+      expect(result.message).toContain("auto-repair retry");
+      expect(result.errors[0]).toContain("stop_reason=end_turn");
+    }
+    expect(sdk.__calls.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry-path failure modes: attempt 1 fails Zod parse; attempt 2 throws
+// transport / sdk-error / abort. The post-retry kind is taken from the
+// attempt-2 throw.
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — retry path: attempt 2 throws transport", () => {
+  test("attempt-1 zod-parse throw, attempt-2 APIConnectionError → kind:'transport'", async () => {
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["sketch"],
+        message: "Required",
+        expected: "object",
+        received: "undefined",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed: 1 issue(s)") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const zodThrow = new AnthropicError(
+      `Failed to parse structured output: ${inner.message}`,
+    ) as AnthropicError & { cause?: unknown };
+    zodThrow.cause = inner;
+
+    const transportErr = new APIConnectionError({
+      message: "connect ECONNREFUSED",
+      cause: new Error("ECONNREFUSED on retry"),
+    });
+
+    const { deps, sdk } = makeDeps([() => zodThrow, () => transportErr]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("transport");
+      expect(result.message).toContain("auto-repair retry");
+    }
+    expect(sdk.__calls.length).toBe(2);
+  });
+});
+
+describe("buildGenerator — retry path: attempt 2 throws sdk-error", () => {
+  test("attempt-1 zod-parse throw, attempt-2 APIError(529) → kind:'sdk-error'", async () => {
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["board"],
+        message: "Required",
+        expected: "object",
+        received: "undefined",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed: 1 issue(s)") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const zodThrow = new AnthropicError(
+      `Failed to parse structured output: ${inner.message}`,
+    ) as AnthropicError & { cause?: unknown };
+    zodThrow.cause = inner;
+
+    class FakeAPIError extends APIError<529, undefined, undefined> {
+      constructor() {
+        super(529 as const, undefined, "529 Overloaded", undefined);
+      }
+    }
+
+    const { deps, sdk } = makeDeps([() => zodThrow, () => new FakeAPIError()]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("sdk-error");
+      expect(result.message).toContain("auto-repair retry");
+    }
+    expect(sdk.__calls.length).toBe(2);
+  });
+});
+
+describe("buildGenerator — retry path: attempt 2 aborts", () => {
+  test("attempt-1 zod-parse throw, signal aborts BEFORE attempt-2 fires → kind:'abort'", async () => {
+    // Adversarial cascade: attempt 1 throws a Zod error so we enter the
+    // auto-repair branch. Between attempt 1 and attempt 2 the caller
+    // aborts the signal. The mock SDK pre-checks `opts.signal.aborted`
+    // on each call, so attempt 2 surfaces as APIUserAbortError → "abort".
+    const controller = new AbortController();
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["board"],
+        message: "Required",
+        expected: "object",
+        received: "undefined",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed: 1 issue(s)") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const zodThrow = new AnthropicError(
+      `Failed to parse structured output: ${inner.message}`,
+    ) as AnthropicError & { cause?: unknown };
+    zodThrow.cause = inner;
+
+    const { deps, sdk } = makeDeps([
+      () => {
+        // Fire the abort BEFORE returning from attempt 1's handler — this
+        // lands the abort flag in time for attempt 2's pre-handler check
+        // in `makeMockSdk`.
+        controller.abort();
+        return zodThrow;
+      },
+      // Attempt 2's handler is never actually invoked — the signal pre-check
+      // throws APIUserAbortError before reaching it. Provide a stub anyway
+      // so an unexpected reach surfaces as "no handler" rather than masking.
+      () => ({
+        parsed_output: parsedFixture,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "{}" }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator(
+      "a robot that waves when something gets close",
+      { signal: controller.signal },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("abort");
+      expect(result.message).toContain("auto-repair retry");
+    }
+    // Both calls were logged (the second hit the abort pre-check).
+    expect(sdk.__calls.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Input-validation guards (synchronous throws; no API call made)
 // ---------------------------------------------------------------------------
 

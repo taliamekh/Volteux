@@ -499,6 +499,158 @@ describe("runPromptPipeline: happy path", () => {
 });
 
 // ---------------------------------------------------------------------------
+// runPromptPipeline: every gate-failure outcome is captured (mid-pipeline
+// short-circuit). These pin the smoke wiring to each gate's failure
+// channel, so a future refactor that drops one of these branches gets
+// caught here rather than at integration time.
+// ---------------------------------------------------------------------------
+
+describe("runPromptPipeline: cross-consistency failure → XCONSIST_FAILED", () => {
+  test("xc gate returns !ok → outcome XCONSIST_FAILED, no rules/compile call", async () => {
+    let rulesCalls = 0;
+    let compileCalls = 0;
+    const pipelineDeps: RunPromptDeps = {
+      classify: async () => defaultClassifyOk(""),
+      generate: async () => defaultGenerateOk(""),
+      runSchemaGate: (input: unknown) => ({ ok: true, value: input as VolteuxProjectDocument }) as ReturnType<RunPromptDeps["runSchemaGate"]>,
+      runCrossConsistencyGate: () => ({
+        ok: false as const,
+        severity: "red" as const,
+        message: "mock cross-consistency fail",
+        errors: ["unknown SKU 9999"],
+      }),
+      runRules: () => {
+        rulesCalls += 1;
+        return { red: [], amber: [], blue: [], attempts: [] };
+      },
+      runCompileGate: async () => {
+        compileCalls += 1;
+        return defaultCompileOk("", 0);
+      },
+    };
+
+    const outcome = await runPromptPipeline("p", pipelineDeps);
+    expect(outcome.kind).toBe("XCONSIST_FAILED");
+    // Subsequent gates must NOT run.
+    expect(rulesCalls).toBe(0);
+    expect(compileCalls).toBe(0);
+  });
+});
+
+describe("runPromptPipeline: rules engine red bucket → RULES_RED(count)", () => {
+  test("runRules returns red.length > 0 → outcome RULES_RED, no compile call", async () => {
+    let compileCalls = 0;
+    const fakeAttempt = {
+      rule: {
+        id: "mock-rule",
+        severity: "red" as const,
+        description: "mock",
+        check: () => ({ passed: true as const }),
+      },
+      result: {
+        passed: false as const,
+        severity: "red" as const,
+        message: "mock failure",
+      },
+    };
+    const pipelineDeps: RunPromptDeps = {
+      classify: async () => defaultClassifyOk(""),
+      generate: async () => defaultGenerateOk(""),
+      runSchemaGate: (input: unknown) => ({ ok: true, value: input as VolteuxProjectDocument }) as ReturnType<RunPromptDeps["runSchemaGate"]>,
+      runCrossConsistencyGate: () => ({ ok: true, value: undefined }),
+      runRules: () => ({
+        red: [fakeAttempt, fakeAttempt],
+        amber: [],
+        blue: [],
+        attempts: [fakeAttempt, fakeAttempt],
+      }),
+      runCompileGate: async () => {
+        compileCalls += 1;
+        return defaultCompileOk("", 0);
+      },
+    };
+
+    const outcome = await runPromptPipeline("p", pipelineDeps);
+    expect(outcome.kind).toBe("RULES_RED");
+    if (outcome.kind === "RULES_RED") {
+      expect(outcome.count).toBe(2);
+    }
+    expect(compileCalls).toBe(0);
+  });
+});
+
+describe("runPromptPipeline: compile failure (non-queue-full) → COMPILE_FAILED(kind)", () => {
+  test("compile-error kind → outcome COMPILE_FAILED(compile-error)", async () => {
+    const pipelineDeps: RunPromptDeps = {
+      classify: async () => defaultClassifyOk(""),
+      generate: async () => defaultGenerateOk(""),
+      runSchemaGate: (input: unknown) => ({ ok: true, value: input as VolteuxProjectDocument }) as ReturnType<RunPromptDeps["runSchemaGate"]>,
+      runCrossConsistencyGate: () => ({ ok: true, value: undefined }),
+      runRules: () => ({ red: [], amber: [], blue: [], attempts: [] }),
+      runCompileGate: async () => ({
+        ok: false as const,
+        severity: "red" as const,
+        kind: "compile-error" as const,
+        message: "arduino-cli reported errors",
+        errors: ["error: 'analogWrite' was not declared in this scope"],
+      }),
+    };
+
+    const outcome = await runPromptPipeline("p", pipelineDeps);
+    expect(outcome.kind).toBe("COMPILE_FAILED");
+    if (outcome.kind === "COMPILE_FAILED") {
+      expect(outcome.failure_kind).toBe("compile-error");
+    }
+  });
+
+  test("transport kind → outcome COMPILE_FAILED(transport)", async () => {
+    const pipelineDeps: RunPromptDeps = {
+      classify: async () => defaultClassifyOk(""),
+      generate: async () => defaultGenerateOk(""),
+      runSchemaGate: (input: unknown) => ({ ok: true, value: input as VolteuxProjectDocument }) as ReturnType<RunPromptDeps["runSchemaGate"]>,
+      runCrossConsistencyGate: () => ({ ok: true, value: undefined }),
+      runRules: () => ({ red: [], amber: [], blue: [], attempts: [] }),
+      runCompileGate: async () => ({
+        ok: false as const,
+        severity: "red" as const,
+        kind: "transport" as const,
+        message: "ECONNREFUSED",
+        errors: ["fetch failed"],
+      }),
+    };
+
+    const outcome = await runPromptPipeline("p", pipelineDeps);
+    expect(outcome.kind).toBe("COMPILE_FAILED");
+    if (outcome.kind === "COMPILE_FAILED") {
+      expect(outcome.failure_kind).toBe("transport");
+    }
+  });
+
+  test("rate-limit kind → outcome COMPILE_FAILED(rate-limit)", async () => {
+    const pipelineDeps: RunPromptDeps = {
+      classify: async () => defaultClassifyOk(""),
+      generate: async () => defaultGenerateOk(""),
+      runSchemaGate: (input: unknown) => ({ ok: true, value: input as VolteuxProjectDocument }) as ReturnType<RunPromptDeps["runSchemaGate"]>,
+      runCrossConsistencyGate: () => ({ ok: true, value: undefined }),
+      runRules: () => ({ red: [], amber: [], blue: [], attempts: [] }),
+      runCompileGate: async () => ({
+        ok: false as const,
+        severity: "red" as const,
+        kind: "rate-limit" as const,
+        message: "429",
+        errors: [],
+      }),
+    };
+
+    const outcome = await runPromptPipeline("p", pipelineDeps);
+    expect(outcome.kind).toBe("COMPILE_FAILED");
+    if (outcome.kind === "COMPILE_FAILED") {
+      expect(outcome.failure_kind).toBe("rate-limit");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // computeSmokeHash determinism
 // ---------------------------------------------------------------------------
 

@@ -213,6 +213,41 @@ describe("buildClassifier — raw output preserved (no threshold filter)", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Defensive: response with no parsed_output. The SDK should normally
+// throw an AnthropicError when structured-output parsing fails; this
+// branch only fires if the SDK ever silently returns no parsed_output.
+// Surfaces as `sdk-error` with the stop_reason carried in errors[].
+// ---------------------------------------------------------------------------
+
+describe("buildClassifier — defensive: parsed_output=null", () => {
+  test("returns kind:'sdk-error' with stop_reason in errors[] (single call, no retry)", async () => {
+    const { deps, sdk } = makeDeps([
+      () => ({
+        parsed_output: null,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 600,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "" }],
+      }),
+    ]);
+    const classifier = buildClassifier(deps);
+    const result = await classifier("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("sdk-error");
+      expect(result.severity).toBe("red");
+      expect(result.errors[0]).toContain("stop_reason=end_turn");
+    }
+    // Classify makes EXACTLY one call — no auto-repair, no retry.
+    expect(sdk.__calls.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Discriminated failure kinds
 // ---------------------------------------------------------------------------
 
