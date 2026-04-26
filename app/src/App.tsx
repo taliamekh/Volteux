@@ -3,7 +3,7 @@ import FlashModal from "./components/FlashModal";
 import Header from "./components/Header";
 import SignInModal from "./components/SignInModal";
 import TweaksPanel from "./components/TweaksPanel";
-import LandingView from "./views/LandingView";
+import LandingView, { type LandingHandle } from "./views/LandingView";
 import LoadingView from "./views/LoadingView";
 import ResultView from "./views/ResultView";
 import { applyRefinement, summarizeChange } from "./data/projects";
@@ -45,6 +45,11 @@ export default function App() {
   const [flashing, setFlashing] = useState(false);
   const [user, setUser] = useState<User | null>(loadUser);
   const [tweaks, setTweaks] = useState<Tweaks>(TWEAK_DEFAULTS);
+
+  // Imperative handle to LandingView so the header CTA can scroll back +
+  // focus the prompt input. Replaces the prior window.__volteux_focusInput
+  // global assignment (kt-007).
+  const landingRef = useRef<LandingHandle | null>(null);
 
   // Loop-prevention guard for the URL-hash effects (U8). When the mount-time
   // restore effect successfully decodes a document and calls setProject, the
@@ -295,9 +300,7 @@ export default function App() {
         accountOpen={accountOpen}
         onCloseAccount={() => setAccountOpen(false)}
         onNewProject={goLanding}
-        onScrollToInput={() =>
-          (window as Window & { __volteux_focusInput?: () => void }).__volteux_focusInput?.()
-        }
+        onScrollToInput={() => landingRef.current?.focusInput()}
         user={user}
         onSignInClick={() => setAuthOpen(true)}
         onSignOut={() => {
@@ -309,6 +312,7 @@ export default function App() {
       {view === "landing" && (
         <div className="view active">
           <LandingView
+            ref={landingRef}
             onSubmit={startBuild}
             onSeeExample={() => {
               const exampleText = "a robot arm that waves when something gets close";
