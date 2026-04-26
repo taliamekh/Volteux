@@ -26,5 +26,20 @@ export default defineConfig({
       // the lockfile, which here is `app/`.
       allow: [".."],
     },
+    // Proxy /api/* to the local pipeline-api server (default port 8788).
+    // pipeline-api wraps runPipeline; runPipeline itself talks to the
+    // Compile API on 8787 server-side. The browser never calls 8787
+    // directly. Override either port via VITE_PIPELINE_API_URL.
+    proxy: {
+      "/api": {
+        target: process.env.VITE_PIPELINE_API_URL ?? "http://127.0.0.1:8788",
+        changeOrigin: true,
+        // 60s timeout — Sonnet generate + arduino-cli compile lands at ~15-30s
+        // typical, with the cross-gate repair retry pushing the worst case
+        // toward 50s. 60s gives headroom without letting a stuck request
+        // block the browser indefinitely.
+        timeout: 60_000,
+      },
+    },
   },
 });

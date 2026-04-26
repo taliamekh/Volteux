@@ -908,6 +908,46 @@ input { font-family: inherit; }
   text-wrap: pretty;
 }
 
+/* Pipeline error banner — surfaces Honest Gap and transport failures
+   with a beginner-readable headline + optional retry. */
+.landing-error {
+  width: 100%; max-width: 680px;
+  margin: 0 0 24px 0;
+  padding: 18px 22px;
+  background: color-mix(in oklch, var(--accent-soft) 85%, white);
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  text-align: left;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.landing-error-headline {
+  font-weight: 600;
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+.landing-error-detail {
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.landing-error-retry {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.landing-error-retry:hover {
+  opacity: 0.88;
+}
+
 .empty-input-wrap {
   width: 100%; max-width: 680px;
   background: var(--surface);

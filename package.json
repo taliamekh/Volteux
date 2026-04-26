@@ -12,6 +12,7 @@
     "compile:build": "docker build -f infra/Dockerfile -t volteux-compile .",
     "compile:up": "docker run --rm -p 8787:8787 -e COMPILE_API_SECRET=\"$COMPILE_API_SECRET\" volteux-compile",
     "compile:server": "bun run infra/server/compile-api.ts",
+    "pipeline:server": "bun run infra/server/pipeline-api.ts",
     "measure:prompt-tokens": "bun scripts/measure-prompt-tokens.ts",
     "pipeline": "bun pipeline/cli.ts",
     "spike:flash": "bun scripts/spike/avrgirl-node.ts",

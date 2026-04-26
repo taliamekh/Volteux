@@ -5,12 +5,26 @@ interface LandingViewProps {
   onSubmit: (prompt: string) => void;
   onSeeExample: () => void;
   setHeaderCtaVisible: (v: boolean) => void;
+  /**
+   * Set when the previous build attempt failed (pipeline returned
+   * Honest Gap, or transport/timeout). Renders a beginner-readable
+   * banner above the prompt input. Cleared on next submit.
+   */
+  loadError?: {
+    kind: string;
+    headline: string;
+    detail?: string;
+  } | null;
+  /** Optional retry callback — if provided, the banner shows a "Try again" button. */
+  onRetry?: () => void;
 }
 
 export default function LandingView({
   onSubmit,
   onSeeExample,
   setHeaderCtaVisible,
+  loadError,
+  onRetry,
 }: LandingViewProps) {
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -70,6 +84,20 @@ export default function LandingView({
           Describe what you want to make in the box below. We'll pick the parts, write the
           code, and teach you what every piece does.
         </p>
+
+        {loadError && (
+          <div className="landing-error" role="alert" aria-live="polite">
+            <div className="landing-error-headline">{loadError.headline}</div>
+            {loadError.detail && (
+              <div className="landing-error-detail">{loadError.detail}</div>
+            )}
+            {onRetry && (
+              <button className="landing-error-retry" onClick={onRetry}>
+                Try again
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="empty-input-wrap" ref={heroInputRef}>
           <input
