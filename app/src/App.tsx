@@ -51,6 +51,23 @@ export default function App() {
   // keeps the hash-write working for the regular "build from scratch" path.
   const restoredFromHashRef = useRef<boolean>(false);
 
+  // Refine-toast clear timer. Tracked so rapid refinements cancel the
+  // previous clear before scheduling the next one — without this, a stale
+  // 2.4s timer from refine #1 could null out a freshly-set toast from
+  // refine #2. Mirrors the SignInModal pattern (auth-timer ref + cleanup).
+  const refineToastTimerRef = useRef<number | null>(null);
+
+  // Cleanup on unmount: a sudden unmount mid-toast would otherwise leak the
+  // pending setRefineToast(null) call into the next mount's React tree.
+  useEffect(() => {
+    return () => {
+      if (refineToastTimerRef.current !== null) {
+        window.clearTimeout(refineToastTimerRef.current);
+        refineToastTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // Persist user to localStorage
   useEffect(() => {
     if (user) localStorage.setItem("volteux_user", JSON.stringify(user));
@@ -150,7 +167,13 @@ export default function App() {
       if (aiMsg) msg = aiMsg;
     }
     setRefineToast(msg);
-    window.setTimeout(() => setRefineToast(null), 2400);
+    if (refineToastTimerRef.current !== null) {
+      window.clearTimeout(refineToastTimerRef.current);
+    }
+    refineToastTimerRef.current = window.setTimeout(() => {
+      refineToastTimerRef.current = null;
+      setRefineToast(null);
+    }, 2400);
   };
 
   const goLanding = () => {
