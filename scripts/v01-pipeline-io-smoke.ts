@@ -57,7 +57,7 @@
  *   | COMPILE_FAILED(kind) | QUEUE_FULL(retry_after_s)
  *
  * The outcome-print switch calls `assertNeverGenerateFailureKind`,
- * `assertNeverClassifyFailureKind`, and `assertNeverFailureKind` (the
+ * `assertNeverClassifyFailureKind`, and `assertNeverCompileGateFailureKind` (the
  * existing one for `CompileGateFailureKind`) at the default branch of
  * each kind switch — a future kind addition fails compile-time at the
  * smoke script too. Mirrors the structural-mirror principle from
@@ -115,7 +115,7 @@ import { runCrossConsistencyGate } from "../pipeline/gates/cross-consistency.ts"
 import { runRules } from "../pipeline/rules/index.ts";
 import {
   runCompileGate,
-  assertNeverFailureKind,
+  assertNeverCompileGateFailureKind,
   type CompileGateFailureKind,
   type CompileGateResult,
 } from "../pipeline/gates/compile.ts";
@@ -259,7 +259,7 @@ function renderCompileKind(kind: CompileGateFailureKind): string {
     case "compile-error":
       return "compile-fail(compile-error)";
     default:
-      assertNeverFailureKind(kind);
+      assertNeverCompileGateFailureKind(kind);
   }
 }
 

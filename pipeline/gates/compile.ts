@@ -294,8 +294,8 @@ export async function runCompileGate(
   const parsed = await parseEnvelope(response);
   // Exhaustive switch — round-2 R2-K-003: the previous if/if/else chain
   // would silently fall through to `parsed.value` if a future variant
-  // were added to EnvelopeParseResult. assertNeverFailureKind (added in
-  // round 1 but unused) enforces compile-time exhaustiveness.
+  // were added to EnvelopeParseResult. assertNeverCompileGateFailureKind
+  // (added in round 1 but unused) enforces compile-time exhaustiveness.
   let body: z.infer<typeof ResponseEnvelopeSchema>;
   switch (parsed.kind) {
     case "non-json":
@@ -390,7 +390,7 @@ function decodedBase64Length(b64: string): number {
 
 /**
  * Compile-time exhaustiveness guard for the EnvelopeParseResult union.
- * Mirrors the pattern of assertNeverFailureKind for CompileGateFailureKind.
+ * Mirrors the pattern of assertNeverCompileGateFailureKind for CompileGateFailureKind.
  * Round-2 R2-K-003: the consumer's switch needs this to catch a future
  * 4th variant at compile time rather than silently falling through to
  * `parsed.value = undefined`.
@@ -495,14 +495,18 @@ function formatIssue(issue: unknown): string {
  *     case "bad-request":   ...; break;
  *     case "rate-limit":    ...; break;
  *     case "compile-error": ...; break;
- *     default: assertNeverFailureKind(result.kind);
+ *     default: assertNeverCompileGateFailureKind(result.kind);
  *   }
  *
  * If a future change adds a 7th kind to the union without updating the
  * switch, tsc fails at the `default:` site rather than letting the case
  * silently fall through. Mirrors the pattern already used in
- * `pipeline/gates/cross-consistency.ts` for `AllowlistViolation`.
+ * `pipeline/gates/cross-consistency.ts` for `AllowlistViolation`,
+ * `assertNeverGenerateFailureKind` in `pipeline/llm/generate.ts`, and
+ * `assertNeverClassifyFailureKind` in `pipeline/llm/classify.ts`. The
+ * symmetric "assertNever<UnionName>" naming is what lets Unit 9's
+ * orchestrator import all three together without ambiguity.
  */
-export function assertNeverFailureKind(kind: never): never {
+export function assertNeverCompileGateFailureKind(kind: never): never {
   throw new Error(`Unhandled CompileGateFailureKind: ${String(kind)}`);
 }

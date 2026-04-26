@@ -5,12 +5,13 @@
  * `CompileGateFailureKind`).
  *
  * The smoke script calls `assertNeverClassifyFailureKind`,
- * `assertNeverGenerateFailureKind`, and `assertNeverFailureKind` (the
- * existing one for `CompileGateFailureKind`) at the default branch of
- * each kind switch. This test mirrors the same pattern with sibling
- * incomplete-switch helpers carrying `// @ts-expect-error` so a future
- * literal added without updating the smoke script's switches fails
- * compile-time at this test as well.
+ * `assertNeverGenerateFailureKind`, and `assertNeverCompileGateFailureKind`
+ * (the renamed-from-`assertNeverFailureKind` guard for
+ * `CompileGateFailureKind`) at the default branch of each kind switch.
+ * This test mirrors the same pattern with sibling incomplete-switch
+ * helpers carrying `// @ts-expect-error` so a future literal added
+ * without updating the smoke script's switches fails compile-time at
+ * this test as well.
  *
  * Mirrors `tests/llm/generate-exhaustiveness.test.ts` and
  * `tests/llm/classify-exhaustiveness.test.ts`.
@@ -26,7 +27,7 @@ import {
   type ClassifyFailureKind,
 } from "../../pipeline/llm/classify.ts";
 import {
-  assertNeverFailureKind,
+  assertNeverCompileGateFailureKind,
   type CompileGateFailureKind,
 } from "../../pipeline/gates/compile.ts";
 import type { SmokeOutcome } from "../../scripts/v01-pipeline-io-smoke.ts";
@@ -84,7 +85,7 @@ function compileKindComplete(kind: CompileGateFailureKind): string {
     case "compile-error":
       return "ce";
     default:
-      assertNeverFailureKind(kind);
+      assertNeverCompileGateFailureKind(kind);
   }
 }
 
@@ -140,7 +141,7 @@ function compileKindIncomplete(kind: CompileGateFailureKind): string {
       return "qf";
     default:
       // @ts-expect-error — `kind` is `"compile-error"` here, not `never`.
-      assertNeverFailureKind(kind);
+      assertNeverCompileGateFailureKind(kind);
       return "fallback";
   }
 }

@@ -200,7 +200,7 @@ export interface GenerateOptions {
 
 /**
  * Compile-time exhaustiveness guard for `GenerateFailureKind` switches.
- * Mirrors `assertNeverFailureKind` in `pipeline/gates/compile.ts`.
+ * Mirrors `assertNeverCompileGateFailureKind` in `pipeline/gates/compile.ts`.
  *
  * Usage in callers (e.g., Unit 9's repair() helper):
  *

@@ -209,8 +209,8 @@ export interface ClassifyOptions {
 
 /**
  * Compile-time exhaustiveness guard for `ClassifyFailureKind` switches.
- * Mirrors `assertNeverFailureKind` in `pipeline/gates/compile.ts` and
- * `assertNeverGenerateFailureKind` in `pipeline/llm/generate.ts`.
+ * Mirrors `assertNeverCompileGateFailureKind` in `pipeline/gates/compile.ts`
+ * and `assertNeverGenerateFailureKind` in `pipeline/llm/generate.ts`.
  *
  * Usage in callers (e.g., Unit 9's classify-then-generate orchestrator):
  *
