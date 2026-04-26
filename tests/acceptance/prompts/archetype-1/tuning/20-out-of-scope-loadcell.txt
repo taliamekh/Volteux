@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: out-of-scope
+expected_archetype: null
+---
+a scale that weighs my packages and tells me the weight

@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: out-of-scope
+expected_archetype: null
+---
+RGB LED strip that pulses with the music

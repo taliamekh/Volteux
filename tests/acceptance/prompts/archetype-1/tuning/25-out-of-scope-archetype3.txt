@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: out-of-scope
+expected_archetype: null
+---
+an OLED menu I can scroll through with a knob

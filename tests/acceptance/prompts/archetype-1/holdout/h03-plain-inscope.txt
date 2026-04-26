@@ -1,0 +1,7 @@
+---
+holdout: true
+expected_kind: ok
+expected_archetype: uno-ultrasonic-servo
+---
+<!-- SEALED 2026-04-27. Do NOT modify this prompt or its expected_* fields without breaking holdout discipline. If the holdout needs refresh, treat as a v0.5 calibration cycle. -->
+wave a small flag when someone approaches my desk

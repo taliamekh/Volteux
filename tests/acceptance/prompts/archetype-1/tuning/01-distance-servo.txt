@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: ok
+expected_archetype: uno-ultrasonic-servo
+---
+turn a servo when an HC-SR04 detects something close

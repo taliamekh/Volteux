@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: ok
+expected_archetype: uno-ultrasonic-servo
+---
+make a thingy that waves when stuff gets close
