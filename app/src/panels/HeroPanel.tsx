@@ -121,6 +121,7 @@ export default function HeroPanel({
           setAutoTour={setAutoTour}
           selectedPin={selectedPin}
           onPinClick={handlePinClick}
+          doc={project.document}
         />
 
         {sel && calloutPos && (

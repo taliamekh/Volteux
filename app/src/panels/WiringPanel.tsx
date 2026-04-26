@@ -16,6 +16,7 @@ import {
   type Hole,
 } from "./breadboard-geometry";
 import { assignBusOffsets, routeWire, type Connection } from "../data/route-wire";
+import WiringSpecTable from "./WiringSpecTable";
 import fixtureJson from "../../../fixtures/uno-ultrasonic-servo.json";
 import {
   VolteuxProjectDocumentSchema,
@@ -576,6 +577,7 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
             ))}
           </g>
         </svg>
+        {expanded && <WiringSpecTable doc={doc} />}
       </div>
     </div>
   );
