@@ -100,6 +100,29 @@ describe("voltage-match", () => {
       expect(result.message).toContain("Voltage mismatch");
     }
   });
+
+  // COR-002 — voltage-match silently passed when both sides of a power
+  // connection were non-MCU consumers (e.g., HC-SR04.VCC → SG90.VCC). The
+  // voltages matched at 0% delta even though no real supply existed.
+  test("fails when sensor power_in is connected to actuator power_in (no MCU on either side, COR-002)", () => {
+    const doc = clone();
+    // Re-route s1.VCC from u1.5V to a1.VCC (servo) — both 5V power_in pins.
+    for (const conn of doc.connections) {
+      if (conn.from.component_id === "s1" && conn.from.pin_label === "VCC") {
+        conn.to.component_id = "a1";
+        conn.to.pin_label = "VCC";
+      }
+    }
+    const result = rule.check(doc);
+    expect(result.passed).toBe(false);
+    if (!result.passed) {
+      expect(result.severity).toBe("red");
+      expect(result.message).toContain("must come from the board's power rail");
+      // The message should name both endpoints + the non-MCU type.
+      expect(result.message).toContain("s1");
+      expect(result.message).toContain("a1");
+    }
+  });
 });
 
 describe("current-budget", () => {
@@ -295,6 +318,41 @@ describe("sensor-trig-output-pin", () => {
       expect(result.message).toContain("Trig");
     }
   });
+
+  // COR-003 — sensor-trig silently passed when Trig was wired to a non-MCU
+  // pin. The "skip when target is non-MCU" branch was the bug — the rule's
+  // stated invariant is that Trig connects to a digital output on the MCU.
+  test("fails when Trig is wired to a non-MCU pin (servo Signal, COR-003)", () => {
+    const doc = clone();
+    for (const conn of doc.connections) {
+      if (conn.from.component_id === "s1" && conn.from.pin_label === "Trig") {
+        conn.to.component_id = "a1";
+        conn.to.pin_label = "Signal";
+      }
+    }
+    const result = rule.check(doc);
+    expect(result.passed).toBe(false);
+    if (!result.passed) {
+      expect(result.severity).toBe("red");
+      // Assert on structured context (stable enum), not prose; T-003.
+      expect(result.context?.target_type).toBe("actuator");
+      expect(result.context?.connected_to).toBe("a1");
+      expect(result.message).toContain("Trig");
+    }
+  });
+
+  // ADV-002 / sketch-fs guard regression: ensure the rule does not crash
+  // when given malformed input the cross-consistency gate would normally
+  // catch first. Defensive — `resolveEndpoint` returning null short-circuits.
+  test("does not throw on a connection referencing an unknown component", () => {
+    const doc = clone();
+    for (const conn of doc.connections) {
+      if (conn.from.component_id === "s1" && conn.from.pin_label === "Trig") {
+        conn.to.component_id = "ghost";
+      }
+    }
+    expect(() => rule.check(doc)).not.toThrow();
+  });
 });
 
 describe("sensor-echo-input-pin", () => {
@@ -314,6 +372,26 @@ describe("sensor-echo-input-pin", () => {
     const result = rule.check(doc);
     expect(result.passed).toBe(false);
     if (!result.passed) expect(result.severity).toBe("red");
+  });
+
+  // COR-003 — parallel to sensor-trig fix.
+  test("fails when Echo is wired to a non-MCU pin (servo Signal, COR-003)", () => {
+    const doc = clone();
+    for (const conn of doc.connections) {
+      if (conn.from.component_id === "s1" && conn.from.pin_label === "Echo") {
+        conn.to.component_id = "a1";
+        conn.to.pin_label = "Signal";
+      }
+    }
+    const result = rule.check(doc);
+    expect(result.passed).toBe(false);
+    if (!result.passed) {
+      expect(result.severity).toBe("red");
+      // Assert on structured context (stable enum), not prose; T-003.
+      expect(result.context?.target_type).toBe("actuator");
+      expect(result.context?.connected_to).toBe("a1");
+      expect(result.message).toContain("Echo");
+    }
   });
 });
 

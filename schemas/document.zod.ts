@@ -191,6 +191,16 @@ export type VolteuxProjectDocument = z.infer<
 export type VolteuxBoard = z.infer<typeof BoardSchema>;
 export type VolteuxComponentRef = z.infer<typeof ComponentRefSchema>;
 export type VolteuxConnection = z.infer<typeof ConnectionSchema>;
+/**
+ * One end of a connection — `{component_id, pin_label}`. Derived from
+ * `PinSchema` so callers (rules, gates, helpers) can not drift away from
+ * the schema's actual shape.
+ *
+ * Joint-signoff change with Talia (2026-04-25): added during the v0.1-pipeline-io
+ * review pass to give `pipeline/rules/rule-helpers.ts` and the cross-consistency
+ * gate a single derived type, replacing structurally-equivalent local aliases.
+ */
+export type VolteuxPin = z.infer<typeof PinSchema>;
 export type VolteuxBreadboardComponent = z.infer<
   typeof BreadboardComponentSchema
 >;

@@ -78,14 +78,198 @@ const HEADER_TO_LIBRARY: Readonly<Record<string, string>> = {
 
 /**
  * Strict regex for `additional_files` keys. Filename only: alphanumerics,
- * dot, hyphen, underscore. Extension must be one of the four C/C++ source
- * extensions arduino-cli understands. No path separators, no traversal,
- * no leading slash, no empty string.
+ * dot, hyphen, underscore. First character MUST be alphanumeric or
+ * underscore (rejects leading dash and leading dot). Extension MUST be one
+ * of the four C/C++ source extensions arduino-cli understands.
  *
- * Origin: scope-guardian + security-lens findings F-004; mirrors the same
- * regex used inside the Compile API in Unit 6.
+ * Consecutive dots like `test..h` are rejected by `validateAdditionalFileName`
+ * (a primary check run BEFORE this regex). Do not rely on the regex alone —
+ * `[A-Za-z0-9_.-]*` accepts repeated dots.
+ *
+ * `.ino` files in additional_files are accepted by THIS regex but
+ * rejected by `validateAdditionalFileName` with `kind:"reserved-name"`
+ * (round-2 ADV-R2-002). arduino-cli compiles ALL `.ino` files in the
+ * sketch directory as ONE translation unit (Arduino IDE's "tabs"
+ * concept), so any `.ino` in additional_files (Sketch.ino, another.ino,
+ * etc.) is a multi-translation-unit injection vector. Routing the
+ * rejection via `reserved-name` rather than `bad-extension` preserves
+ * the agent-switchable semantic — agents can distinguish "you tried to
+ * inject a second sketch" from "you used a wrong extension."
+ *
+ * Sandbox bypass surface (arduino-cli #758): `arduino-cli.yaml`,
+ * `sketch.json`, `library.properties`, `hardware/platform.txt` would
+ * override the platform recipe and execute arbitrary commands. Each is
+ * rejected by `validateAdditionalFileName` with `kind:"sandbox-bypass"`
+ * before the regex check fires (round-2 AN-R2-002 — round-1 collapsed
+ * these into the generic `bad-extension` kind).
+ *
+ * SINGLE SOURCE OF TRUTH. The Compile API (`infra/server/sketch-fs.ts`)
+ * imports this constant + `validateAdditionalFileName`. Defense in depth
+ * comes from running the predicate at TWO sites (cross-consistency gate
+ * before the compile slot, server before invoking arduino-cli), not from
+ * defining it twice. Two literal copies were the bug SEC-002 + ADV-003
+ * demonstrated.
+ *
+ * Origin: scope-guardian + security-lens findings F-004 (initial allowlist);
+ * SEC-002 + ADV-003 hardened the leading-character anchor and consecutive-dot
+ * rejection; ADV-R2-002 added the `.ino`-as-reserved-name primary check
+ * + AN-R2-002 split sandbox-bypass into its own kind.
  */
-export const ADDITIONAL_FILE_NAME_REGEX = /^[A-Za-z0-9_.-]+\.(ino|h|cpp|c)$/;
+export const ADDITIONAL_FILE_NAME_REGEX =
+  /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.(ino|h|cpp|c)$/;
+
+/**
+ * Validate an `additional_files` key against the filename allowlist.
+ *
+ * Returns `null` on pass. Returns a human-readable reason string on fail.
+ *
+ * Layered checks (each fails closed):
+ *   1. Empty string                      — shouldn't reach here, but cheap to verify.
+ *   2. Null byte                         — POSIX path string with a NUL is undefined behavior.
+ *   3. Path traversal (`..`)             — primary check (was dead code before SEC-002 / ADV-003 fix;
+ *                                          the old regex accepted `test..h`, so this branch was never
+ *                                          reached). Now runs BEFORE the regex.
+ *   4. Path separator (`/` or `\`)       — disallowed; filenames are flat.
+ *   5. Leading slash                     — absolute paths disallowed.
+ *   6. Regex                             — alphanumeric/underscore-led, allowed extension.
+ *
+ * On regex failure, the reason names the regex source so future contributors
+ * can grep `ADDITIONAL_FILE_NAME_REGEX` and find this site.
+ */
+/**
+ * Discriminated rejection class. Agent callers (Unit 9 orchestrator,
+ * eval harness, smoke script) switch on `kind` rather than parsing the
+ * free-text `reason` string. Closes W-001 from the v0.1-pipeline-io
+ * review pass.
+ *
+ * Round-2 review surfaced two missing kinds that escaped via wider local
+ * unions (M2-004 / R2-K-007 / AC-010 + AN-R2-002): `reserved-name` was
+ * defined locally in `sketch-fs.ts` and emitted over the wire without
+ * appearing in this canonical type; `sandbox-bypass` was collapsed into
+ * `bad-extension` even though sandbox-bypass filenames warrant a distinct
+ * agent-side response. This union now lists ALL six values that the
+ * server can emit; agent-side `switch (kind)` is exhaustive over the
+ * canonical set.
+ *
+ *   `empty`             — the name is the empty string
+ *   `null-byte`         — POSIX path string with a literal NUL byte
+ *   `consecutive-dots`  — `..` anywhere in the name (path traversal /
+ *                         extension obfuscation)
+ *   `path-separator`    — `/` or `\` in the name (flat names only)
+ *   `bad-extension`     — fails the regex (leading dash, leading dot,
+ *                         non-allowed extension, non-alphanumeric chars)
+ *   `sandbox-bypass`    — name explicitly matches an arduino-cli sandbox
+ *                         override surface (`arduino-cli.yaml`,
+ *                         `sketch.json`, `library.properties`,
+ *                         `platform.txt`, etc.); reported separately so
+ *                         agents can surface to operator immediately
+ *                         rather than feeding to LLM auto-repair
+ *   `reserved-name`     — name would overwrite a reserved filesystem
+ *                         entry the server creates (e.g., `sketch.ino`
+ *                         main sketch). Wider context: `sketch-fs.ts`.
+ */
+export type FilenameRejectionKind =
+  | "empty"
+  | "null-byte"
+  | "consecutive-dots"
+  | "path-separator"
+  | "bad-extension"
+  | "sandbox-bypass"
+  | "reserved-name";
+
+/**
+ * Known arduino-cli sandbox override surfaces. Each is structurally
+ * blocked by the extension allowlist regex (none ends in `.h|.cpp|.c`),
+ * but emitting `sandbox-bypass` instead of `bad-extension` gives agent
+ * callers a discrete signal that a known dangerous name was attempted.
+ *
+ * Origin: arduino-cli #758 sandbox bypass. Round-2 AN-R2-002 split this
+ * out from the generic bad-extension catch-all.
+ */
+const SANDBOX_BYPASS_NAMES = new Set([
+  "arduino-cli.yaml",
+  "sketch.json",
+  "sketch.yaml",
+  "library.properties",
+  "platform.txt",
+  "boards.txt",
+  "programmers.txt",
+]);
+
+/**
+ * Structured result of a filename allowlist check.
+ *
+ * `kind` is the agent-switchable enum; `reason` is the human-readable
+ * message preserved for log surfaces and beginner-facing error copy.
+ */
+export interface FilenameRejection {
+  kind: FilenameRejectionKind;
+  reason: string;
+}
+
+/**
+ * Validate an `additional_files` key against the allowlist.
+ *
+ * Returns `null` on pass, or a {kind, reason} pair on fail. Both fields
+ * are populated; agent callers should switch on `kind` while log/UI
+ * surfaces should display `reason`.
+ *
+ * Layered checks (each fails closed):
+ *   1. Empty string
+ *   2. Null byte
+ *   3. Consecutive dots (`..`) — primary check; ADV-003 fix
+ *   4. Path separator (`/` or `\`)
+ *   5. Regex (alphanumeric/underscore-led, allowed extension; SEC-002 fix)
+ */
+export function validateAdditionalFileName(
+  name: string,
+): FilenameRejection | null {
+  if (name === "")
+    return { kind: "empty", reason: "empty filename" };
+  if (name.includes("\0"))
+    return { kind: "null-byte", reason: "null byte in filename" };
+  if (name.includes(".."))
+    return {
+      kind: "consecutive-dots",
+      reason:
+        "consecutive dots not allowed (path traversal or extension obfuscation)",
+    };
+  if (name.includes("/") || name.includes("\\"))
+    return {
+      kind: "path-separator",
+      reason: "path separators not allowed (use a flat filename)",
+    };
+  // Note: a `startsWith("/")` check used to live here as a "leading slash"
+  // guard but it is unreachable — any name beginning with "/" contains "/"
+  // and is caught by the path-separator check above.
+  // Known sandbox-bypass surfaces — emit a distinct kind so agents can
+  // surface to operator immediately rather than feeding to LLM auto-repair.
+  // Comparison is case-insensitive (some filesystems are case-insensitive
+  // and `Arduino-cli.yaml` would still be processed by arduino-cli).
+  if (SANDBOX_BYPASS_NAMES.has(name.toLowerCase()))
+    return {
+      kind: "sandbox-bypass",
+      reason: `${name} is a known arduino-cli sandbox-override surface`,
+    };
+  // ADV-R2-002 — reject any `.ino` in additional_files as a reserved
+  // name. arduino-cli compiles ALL `.ino` files in the sketch directory
+  // as one translation unit, so `Sketch.ino`, `another.ino`, `foo.INO`,
+  // etc. are all multi-translation-unit injection vectors. Comparison
+  // is case-insensitive — some filesystems case-fold and arduino-cli
+  // treats both `.ino` and `.INO` as compilable.
+  if (name.toLowerCase().endsWith(".ino"))
+    return {
+      kind: "reserved-name",
+      reason:
+        "additional_files cannot include .ino files (arduino-cli would compile them as additional translation units; the main sketch is the single sketch_main_ino field)",
+    };
+  if (!ADDITIONAL_FILE_NAME_REGEX.test(name))
+    return {
+      kind: "bad-extension",
+      reason: `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`,
+    };
+  return null;
+}
 
 /**
  * C preprocessor Phase 2: splice logical source lines by deleting every
@@ -164,6 +348,8 @@ export type AllowlistViolation =
       kind: "filename-allowlist";
       filename: string;
       reason: string;
+      /** The structured rejection class (closes W-001 from review). */
+      rejection_kind: FilenameRejectionKind;
     }
   | {
       kind: "library-not-in-allowlist";
@@ -204,11 +390,13 @@ export function runAllowlistChecks(
 
   // (1) Filename allowlist for additional_files keys
   for (const filename of Object.keys(input.additional_files)) {
-    if (!ADDITIONAL_FILE_NAME_REGEX.test(filename)) {
+    const rejection = validateAdditionalFileName(filename);
+    if (rejection !== null) {
       violations.push({
         kind: "filename-allowlist",
         filename,
-        reason: filenameViolationReason(filename),
+        reason: rejection.reason,
+        rejection_kind: rejection.kind,
       });
     }
   }
@@ -276,14 +464,4 @@ export function runAllowlistChecks(
   }
 
   return violations;
-}
-
-function filenameViolationReason(filename: string): string {
-  if (filename === "") return "empty filename";
-  if (filename.includes("\0")) return "null byte in filename";
-  if (filename.startsWith("/")) return "absolute path not allowed";
-  if (filename.includes("..")) return "path traversal not allowed";
-  if (filename.includes("/") || filename.includes("\\"))
-    return "path separators not allowed (use a flat filename)";
-  return `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`;
 }

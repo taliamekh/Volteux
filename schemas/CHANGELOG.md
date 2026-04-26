@@ -14,6 +14,24 @@ requires both signatures on the commit + a new entry here. No exceptions for
 
 **Signatures:** Kai (Track 2) — Talia (joint Day 1 session)
 
+### 2026-04-26 — `VolteuxPin` derived-type export (round-2 review residual)
+
+Pure additive type export. `PinSchema` itself is unchanged.
+
+- **Added `export type VolteuxPin = z.infer<typeof PinSchema>`.** Used by
+  `pipeline/rules/rule-helpers.ts` so its `Endpoint` parameter type is
+  derived from the schema rather than re-declared. Round-1 introduced a
+  local `Endpoint = { component_id: string; pin_label: string }` alias
+  that would silently drift if `PinSchema` ever gains a field; deriving
+  via `z.infer` makes the schema authoritative. **Talia signoff:
+  acknowledged in PR thread (joint review of round-1 fixes 2026-04-26).**
+- No runtime behavior change. No fixture impact. No JSON Schema regeneration
+  needed (only the TS type surface changed).
+- This entry retroactively closes round-2 review finding PS-004 — the
+  round-1 commit that introduced the export omitted this CHANGELOG entry,
+  which CLAUDE.md schema discipline requires "for every change to
+  document.zod.ts. No exceptions for tiny fields."
+
 ### 2026-04-25 — late-day tightenings (within v0.1 lock; review-driven)
 
 Two strict-narrowing changes from the post-Unit-5 review pass. Both are

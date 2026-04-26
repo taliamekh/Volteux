@@ -4,6 +4,7 @@ import {
   parseIncludes,
   runAllowlistChecks,
   stripComments,
+  validateAdditionalFileName,
   type AllowlistInput,
 } from "../../pipeline/gates/library-allowlist.ts";
 
@@ -65,7 +66,19 @@ describe("parseIncludes", () => {
 });
 
 describe("ADDITIONAL_FILE_NAME_REGEX", () => {
-  const valid = ["sketch.ino", "helper.h", "lib.cpp", "extra.c", "my-file_2.ino"];
+  // The regex enforces: leading [A-Za-z0-9_], then [A-Za-z0-9_.-]*,
+  // then `.` + one of {ino,h,cpp,c}. It does NOT police consecutive dots —
+  // that lives in `validateAdditionalFileName`.
+  const valid = [
+    "sketch.ino",
+    "helper.h",
+    "lib.cpp",
+    "extra.c",
+    "my-file_2.ino",
+    "_internal.h", // leading underscore allowed
+    "1foo.ino", // leading digit allowed
+    "a.b.ino", // single dot in stem (no consecutive) — boundary case for ADV-003
+  ];
   const invalid = [
     "",
     "../etc/passwd",
@@ -78,6 +91,13 @@ describe("ADDITIONAL_FILE_NAME_REGEX", () => {
     "arduino-cli.yaml",
     "hardware/foo.h",
     "platform.txt",
+    // SEC-002: leading-dash filenames could collide with arduino-cli flag parsing
+    "-flag.h",
+    "--no-color.ino",
+    // ADV-003 (regex layer): leading-dot hidden files are now rejected by the regex
+    // (the consecutive-dots case is exercised by validateAdditionalFileName below)
+    ".hidden.h",
+    ".env.ino",
   ];
 
   for (const name of valid) {
@@ -91,6 +111,219 @@ describe("ADDITIONAL_FILE_NAME_REGEX", () => {
       expect(ADDITIONAL_FILE_NAME_REGEX.test(name)).toBe(false);
     });
   }
+});
+
+describe("validateAdditionalFileName (the predicate the Compile API also imports)", () => {
+  test("returns null on a clean filename", () => {
+    expect(validateAdditionalFileName("foo.h")).toBeNull();
+    // Round-2 ADV-R2-002: any .ino is now reserved-name. Switched to .h
+    // for the multi-dot-stem boundary case (still important for ADV-003).
+    expect(validateAdditionalFileName("a.b.h")).toBeNull();
+  });
+
+  test("rejects empty string with a clear reason and kind", () => {
+    expect(validateAdditionalFileName("")).toEqual({
+      kind: "empty",
+      reason: "empty filename",
+    });
+  });
+
+  test("rejects null byte (regardless of position) with kind:'null-byte'", () => {
+    expect(validateAdditionalFileName("sketch\0.ino")).toEqual({
+      kind: "null-byte",
+      reason: "null byte in filename",
+    });
+  });
+
+  // ADV-003 — consecutive dots: previously dead code in `filenameViolationReason`
+  // because the old regex accepted `test..h`, so the post-regex `..` check was
+  // never reached. Now the `..` check runs as a primary check before the regex.
+  test("rejects consecutive dots — `test..h` (ADV-003) with kind:'consecutive-dots'", () => {
+    expect(validateAdditionalFileName("test..h")).toEqual({
+      kind: "consecutive-dots",
+      reason:
+        "consecutive dots not allowed (path traversal or extension obfuscation)",
+    });
+  });
+
+  test("rejects consecutive dots — `..hidden.ino` (ADV-003)", () => {
+    expect(validateAdditionalFileName("..hidden.ino")?.kind).toBe(
+      "consecutive-dots",
+    );
+  });
+
+  test("rejects path traversal `../etc/passwd` (the consecutive-dot check fires first, which is fine)", () => {
+    // The rejection class is "consecutive-dots" — the path-traversal
+    // pattern always contains "..", so the primary check fires first.
+    expect(validateAdditionalFileName("../etc/passwd")?.kind).toBe(
+      "consecutive-dots",
+    );
+  });
+
+  test("rejects path separators with kind:'path-separator'", () => {
+    expect(validateAdditionalFileName("sub/foo.ino")).toEqual({
+      kind: "path-separator",
+      reason: "path separators not allowed (use a flat filename)",
+    });
+    expect(validateAdditionalFileName("sub\\foo.ino")).toEqual({
+      kind: "path-separator",
+      reason: "path separators not allowed (use a flat filename)",
+    });
+  });
+
+  test("rejects absolute path `/etc/passwd` with kind:'path-separator' (separator check fires first)", () => {
+    expect(validateAdditionalFileName("/etc/passwd")?.kind).toBe(
+      "path-separator",
+    );
+  });
+
+  // SEC-002 — leading-dash filenames could become CLI flag injections if
+  // arduino-cli were ever invoked with shell interpolation.
+  test("rejects leading-dash `-flag.h` (SEC-002) with kind:'bad-extension'", () => {
+    const rejection = validateAdditionalFileName("-flag.h");
+    expect(rejection).not.toBeNull();
+    expect(rejection?.kind).toBe("bad-extension");
+    expect(rejection?.reason).toContain("does not match");
+  });
+
+  test("rejects double-dash `--no-color.h` (SEC-002)", () => {
+    // Switched extension from .ino to .h since round-2 routes any .ino
+    // to reserved-name; this test still exercises the leading-dash
+    // bypass surface that SEC-002 fixed.
+    const rejection = validateAdditionalFileName("--no-color.h");
+    expect(rejection?.kind).toBe("bad-extension");
+  });
+
+  // Sandbox bypass surface (arduino-cli #758): each is rejected by the
+  // extension check (none ends in .ino|.h|.cpp|.c). These tests document
+  // *why* the extension constraint must not be relaxed.
+  // Round-2 AN-R2-002: sandbox-bypass surfaces now get their own
+  // `kind` so agents can route them differently from generic typos.
+  test("rejects sandbox bypass: arduino-cli.yaml (#758) with kind:'sandbox-bypass'", () => {
+    expect(validateAdditionalFileName("arduino-cli.yaml")?.kind).toBe(
+      "sandbox-bypass",
+    );
+  });
+
+  test("rejects sandbox bypass: sketch.json (#758) with kind:'sandbox-bypass'", () => {
+    expect(validateAdditionalFileName("sketch.json")?.kind).toBe(
+      "sandbox-bypass",
+    );
+  });
+
+  test("rejects sandbox bypass: library.properties (#758) with kind:'sandbox-bypass'", () => {
+    expect(validateAdditionalFileName("library.properties")?.kind).toBe(
+      "sandbox-bypass",
+    );
+  });
+
+  test("rejects sandbox bypass: platform.txt (#758) with kind:'sandbox-bypass'", () => {
+    expect(validateAdditionalFileName("platform.txt")?.kind).toBe(
+      "sandbox-bypass",
+    );
+  });
+
+  // Round-2 ADV-R2-002: any .ino in additional_files is rejected as
+  // reserved-name (arduino-cli compiles all .ino as one translation
+  // unit; the main sketch is the single sketch_main_ino field).
+  test("rejects `.ino` files as reserved-name — sketch.ino (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("sketch.ino")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("rejects `.ino` files as reserved-name — Sketch.ino case-insensitive (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("Sketch.ino")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("rejects `.ino` files as reserved-name — another.ino (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("another.ino")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("rejects `.ino` files as reserved-name — foo.INO uppercase (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("foo.INO")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("returns null for legitimate boundary case `a.b.h` (single dots in stem)", () => {
+    // Important regression case for the ADV-003 fix: we must reject CONSECUTIVE
+    // dots without rejecting all multi-dot stems. Switched from `.ino` to
+    // `.h` since round-2 routes any `.ino` to reserved-name.
+    expect(validateAdditionalFileName("a.b.h")).toBeNull();
+  });
+});
+
+// Adversarial review #1 (T-002 follow-up): the single-source regex argument
+// depends on the PREDICATE behaving identically AT THE SERVER'S CALL SITE,
+// not just at re-import of the same module path (which Bun caches and
+// always returns the same instance). To actually catch a refactor where
+// `infra/server/sketch-fs.ts` shims or wraps the import differently in
+// the Docker bundle, the test must drive the server-side code path —
+// not just re-import the module the server imports.
+//
+// `createPerRequestSketchDir` is the only consumer of
+// `validateAdditionalFileName` in `infra/server/sketch-fs.ts`. By calling
+// it with each candidate filename and inspecting the rejection reason,
+// the test exercises the predicate through the same import chain the
+// running server uses. If a future refactor introduces a server-local
+// shim or barrel that diverges, this test fails on the first divergent
+// input.
+describe("validateAdditionalFileName — predicate parity at the server's call site", () => {
+  test("createPerRequestSketchDir rejects exactly the inputs validateAdditionalFileName rejects", async () => {
+    const { createPerRequestSketchDir } = await import(
+      "../../infra/server/sketch-fs.ts"
+    );
+
+    // Round-2: predicate now handles ALL rejection classes including
+    // reserved-name (any .ino) and sandbox-bypass. Test inputs cover
+    // all six FilenameRejectionKind values plus the happy path.
+    const inputs = [
+      "_internal.h",
+      "1foo.h",
+      "a.b.h",
+      "extra.cpp",
+      "main.c",
+      "", // empty
+      "-flag.h", // bad-extension (leading dash)
+      ".hidden.h", // bad-extension (leading dot)
+      "test..h", // consecutive-dots
+      "../etc/passwd", // consecutive-dots (catches first)
+      "sub/foo.h", // path-separator
+      "sketch\0.h", // null-byte
+      "arduino-cli.yaml", // sandbox-bypass
+      "library.properties", // sandbox-bypass
+      "platform.txt", // sandbox-bypass
+      "sketch.ino", // reserved-name (.ino in additional_files)
+      "Sketch.ino", // reserved-name (case-insensitive)
+      "another.ino", // reserved-name (any .ino name)
+    ];
+
+    for (const filename of inputs) {
+      const direct = validateAdditionalFileName(filename);
+      const result = await createPerRequestSketchDir({
+        main_ino: "void setup(){}\nvoid loop(){}",
+        additional_files: { [filename]: "x" },
+      });
+
+      if (direct === null) {
+        expect(result.ok).toBe(true);
+        if (result.ok) await result.handle.cleanup();
+      } else {
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.kind).toBe("filename-allowlist");
+          expect(result.error.filename).toBe(filename);
+          expect(result.error.reason).toBe(direct.reason);
+          expect(result.error.rejection_kind).toBe(direct.kind);
+        }
+      }
+    }
+  });
 });
 
 describe("runAllowlistChecks — happy path", () => {

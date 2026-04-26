@@ -1,0 +1,257 @@
+---
+title: SHA-256 cache key NUL collision via raw \0-delimited concatenation
+module: infra-server-cache
+date: 2026-04-26
+problem_type: security_issue
+component: tooling
+severity: high
+symptoms:
+  - Two distinct compile inputs (different `fqbn` or `main_ino`) produce
+    identical SHA-256 cache keys when one of the values contains a NUL byte,
+    causing `cacheGet()` to return a poisoned `.hex` artifact for the wrong
+    sketch with HTTP 200 and no error signal.
+  - `Bun.spawn` argv NUL-truncates `fqbn` at the first `\0`, so a value like
+    `arduino:avr:uno\0arduino:avr:mega` compiles successfully against
+    `arduino:avr:uno` while the (pre-fix) cache key hashed the full string —
+    making the poisoned cache entry both reachable and stable.
+  - A round-1 partial fix that only protected `additional_files` and
+    `libraries` passed all existing tests because the test suite covered NUL
+    in those fields but not in the scalar `fqbn` and `main_ino` fields.
+  - Three independent reviewer personas (correctness, adversarial, security)
+    re-flagged the same structural class of bug at the remaining call sites
+    in round-2 review.
+root_cause: wrong_api
+resolution_type: code_fix
+tags:
+  - cache
+  - sha256
+  - canonical-serialization
+  - nul-byte
+  - cache-poisoning
+  - hash-collision
+  - argv-injection
+  - arduino-cli
+related_components:
+  - testing_framework
+  - tooling
+---
+
+# SHA-256 cache key NUL collision via raw `\0`-delimited concatenation
+
+## Problem
+
+The `cacheKey()` function in `infra/server/cache.ts` used raw `\0`-delimited
+concatenation across all five `CacheKeyInput` fields when feeding bytes into
+SHA-256. Because `z.string().min(1)` (the Zod schema for `fqbn` and `main_ino`)
+accepts NUL bytes, an attacker or a malformed LLM output could craft two
+distinct compile inputs that produce an identical cache key — causing the
+server to serve a stale or adversarially-crafted `.hex` artifact for a
+different sketch.
+
+## Symptoms
+
+- Two `CacheKeyInput` values with different `fqbn` or `main_ino` contents
+  collide to the same SHA-256 key. `cacheGet()` returns a hit for the wrong
+  compile artifact with HTTP 200 and no warning.
+- Verified collision: `fqbn = "arduino:avr:uno\0"` paired with
+  `main_ino = "X"` hashed identically to `fqbn = "arduino:avr:uno"` paired
+  with `main_ino = "\0X"` under the round-1 implementation.
+- `Bun.spawn` argv NUL-truncates `fqbn` at the first `\0`, so the poisoned
+  cache entry is reachable: a successful arduino-cli compile against the
+  truncated `fqbn` populates the cache under a key derived from the full
+  (untruncated) string.
+- The bug is invisible from logs without purpose-built collision tests. No
+  fall-through to a fresh compile; no cache-miss path; no observable
+  signal from production telemetry.
+- Round-1 fix (commit `0fe8e78`) targeted `additional_files` and `libraries`
+  only, leaving the three scalar fields still vulnerable. The existing test
+  suite covered NUL in `additional_files` values but not in scalar fields,
+  so the partial fix passed CI.
+
+## What Didn't Work
+
+**Round-1 partial fix (commit `0fe8e78`, "safe_auto cluster from /ce:review"):**
+
+The first review pass flagged a NUL-collision in `additional_files` values
+specifically. The fix applied `JSON.stringify` to `additionalSorted` and
+`librariesSorted` but left the three scalar fields (`toolchainHash`, `fqbn`,
+`main_ino`) still joined with raw `\0` separators via sequential
+`hash.update()` calls:
+
+```ts
+// Round-1 state — STILL VULNERABLE in fqbn + main_ino
+export function cacheKey(input: CacheKeyInput): string {
+  const additionalSorted = Object.fromEntries(
+    Object.entries(input.additional_files).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const librariesSorted = [...input.libraries].sort();
+  const hash = createHash("sha256");
+  hash.update(input.toolchainHash);
+  hash.update("\0");
+  hash.update(input.fqbn);            // ← raw concat, NUL-vulnerable
+  hash.update("\0");
+  hash.update(input.main_ino);        // ← raw concat, NUL-vulnerable
+  hash.update("\0");
+  hash.update(JSON.stringify(additionalSorted));  // ← protected by round-1
+  hash.update("\0");
+  hash.update(JSON.stringify(librariesSorted));   // ← protected by round-1
+  return `${input.toolchainHash.slice(0, 8)}-${hash.digest("hex")}`;
+}
+```
+
+Why it failed: the fix targeted the concrete instance the original reviewer
+surfaced (`additional_files` value containing `\0`) without auditing whether
+the same structural class of bug — user-controlled bytes fed raw into a
+`\0`-delimited hash — existed at any other call site. It did. `fqbn` and
+`main_ino` are both `z.string().min(1)` fields with no NUL rejection, and
+both pass directly to `hash.update()` as raw strings. A grep for
+`hash.update(input.` would have enumerated all five call sites in seconds;
+that grep was not run. Round-2 caught the remaining 3 only because three
+independent reviewer personas (correctness COR-R2-003, adversarial
+ADV-R2-001, security SEC-CACHEKEY-NUL-001) re-examined the entire
+`cacheKey` function body with no shared context.
+
+## Solution
+
+**Round-2 full fix (commit `19ce909`, "manual residual cluster, Group D"):**
+
+Serialize ALL five fields into a single canonical JSON object before hashing.
+One `hash.update()` call on the canonical string; no separator bytes
+anywhere.
+
+Current state of `infra/server/cache.ts`:
+
+```ts
+export function cacheKey(input: CacheKeyInput): string {
+  const additionalSorted = Object.fromEntries(
+    Object.entries(input.additional_files).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+  );
+  const librariesSorted = [...input.libraries].sort();
+
+  // ALL fields go through JSON.stringify. A single canonical JSON object
+  // is structurally unambiguous regardless of value content (NUL bytes,
+  // structural characters, etc.). The previous \0-delimited approach
+  // mixed serialization styles and was the bug.
+  const canonical = JSON.stringify({
+    toolchainHash: input.toolchainHash,
+    fqbn: input.fqbn,
+    main_ino: input.main_ino,
+    additional_files: additionalSorted,
+    libraries: librariesSorted,
+  });
+
+  const hash = createHash("sha256");
+  hash.update(canonical);
+  return `${input.toolchainHash.slice(0, 8)}-${hash.digest("hex")}`;
+}
+```
+
+The `additionalSorted` reconstruction via `Object.fromEntries(sorted)` is
+preserved so `JSON.stringify` produces a deterministic key order regardless
+of insertion order. `librariesSorted` is a plain sorted array;
+`JSON.stringify` of an array is already order-stable.
+
+## Why This Works
+
+SHA-256 is a streaming hash: sequential `hash.update()` calls over raw byte
+strings with literal `\0` separators are unambiguous **only if** the input
+bytes are guaranteed not to contain `\0`. `z.string()` carries no such
+guarantee — it accepts any Unicode code point including U+0000. This makes
+any raw `\0`-delimited concatenation scheme over user-controlled string
+fields structurally vulnerable to collision.
+
+`JSON.stringify` produces a canonically unambiguous serialization regardless
+of value content because:
+
+- String values are double-quoted, so the delimiter is unambiguous.
+- NUL (U+0000) is encoded as `\u0000` inside quoted strings — it cannot
+  appear as a literal byte in the JSON output.
+- Every structural character (`{`, `}`, `[`, `]`, `:`, `,`, `"`) that
+  appears inside a string value is backslash-escaped, so the parser cannot
+  mistake value content for structure.
+
+This connects directly to the principle documented in
+[`../best-practices/c-preprocessor-modelling-in-llm-output-gates-2026-04-25.md`](../best-practices/c-preprocessor-modelling-in-llm-output-gates-2026-04-25.md).
+That learning states: **replicate the downstream tool's transformation
+pipeline before matching.** The cache-key analogue is the same principle one
+layer earlier: **build a canonical pre-hash form that the receiving hash
+function cannot mis-interpret.** The C preprocessor learning captures the
+rule at the regex/compiler boundary; this learning captures it at the
+serialization/hash boundary. In both cases the failure mode is identical in
+shape — a static analysis or hashing function operates on a representation
+that diverges from the representation the downstream processor (compiler;
+hash function) actually receives.
+
+## Prevention
+
+1. **Canonical-envelope rule for composite hash keys.** For any composite
+   hash key with user-controlled string fields, serialize a single envelope
+   object via `JSON.stringify`, not field-by-field `.update()` calls with
+   separator bytes. The separator-byte approach requires a guarantee that
+   values do not contain the separator — a guarantee `z.string()` cannot
+   provide and that silently breaks when the input space expands.
+
+2. **Grep all call sites for the same pattern before closing the issue.**
+   Round-1 fixed 2 of 5 fields (the ones the initial reviewer explicitly
+   named). When fixing a class of bugs, run a grep for the structural
+   shape of the bug (here: `hash.update(input.`) and audit every match,
+   not just the one the reviewer surfaced.
+
+3. **Collision tests inject NUL bytes into EACH input field independently.**
+   The round-1 test suite covered NUL in `additional_files` values only;
+   that test passed after round-1 and created false confidence. A complete
+   test matrix exercises: NUL in `fqbn`, NUL in `main_ino`, NUL in
+   `additional_files` key, NUL in `additional_files` value, NUL embedded
+   in a library name. Example assertion shape:
+
+   ```ts
+   test("cacheKey rejects NUL collision across scalar fields", () => {
+     const a = cacheKey({ ...base, fqbn: "arduino:avr:uno\0", main_ino: "X" });
+     const b = cacheKey({ ...base, fqbn: "arduino:avr:uno", main_ino: "\0X" });
+     expect(a).not.toBe(b);
+   });
+   ```
+
+4. **Treat NUL bytes in any user-supplied field as an attack signal in this
+   domain.** The compile API passes `fqbn` directly to `Bun.spawn` argv.
+   C-string argv parsing NUL-truncates at the first `\0`, so
+   `fqbn = "arduino:avr:uno\0anything"` compiles as `arduino:avr:uno` while
+   the cache key (pre-fix) hashed the full string. A NUL-containing `fqbn`
+   is simultaneously a cache-poisoning vector **and** an argv-injection
+   bypass. Add a Zod `.refine()` that rejects `\0` in `fqbn` and `main_ino`
+   as defense-in-depth even after the cache fix, since `z.string().min(1)`
+   does not exclude NUL:
+
+   ```ts
+   const SafeArduinoString = z
+     .string()
+     .min(1)
+     .refine((s) => !s.includes("\0"), { message: "NUL byte not permitted" });
+   ```
+
+5. **Multi-reviewer review for security-sensitive code paths.** Round-2
+   only caught the remaining surface because three reviewer personas
+   (correctness, adversarial, security) examined the function body
+   independently with no shared context. For cryptographic boundaries
+   (hashing, signing, MAC construction, key derivation) treat single-
+   reviewer signoff as insufficient.
+
+## Related Issues
+
+- [`../best-practices/c-preprocessor-modelling-in-llm-output-gates-2026-04-25.md`](../best-practices/c-preprocessor-modelling-in-llm-output-gates-2026-04-25.md) —
+  sibling learning for the same "replicate the downstream pipeline"
+  principle at the regex/compiler boundary rather than the
+  serialization/hash boundary. The two docs form a pair under a shared
+  mental model: **the static layer must operate on the same representation
+  the downstream processor sees.**
+- Round-1 `/ce:review` pass (commit `0fe8e78`, "safe_auto cluster") —
+  surfaced the `additional_files` value collision case; the fix was
+  correct in shape but incomplete in scope.
+- Round-2 `/ce:review` pass (commit `19ce909`, "manual residual cluster,
+  Group D") — three independent reviewer personas
+  (correctness COR-R2-003, adversarial ADV-R2-001, security
+  SEC-CACHEKEY-NUL-001) independently re-flagged the remaining `fqbn` and
+  `main_ino` surface; the canonical JSON envelope fix closed all five
+  fields simultaneously.
