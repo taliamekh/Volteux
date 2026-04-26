@@ -197,14 +197,15 @@ export default function App() {
   // loop. history.replaceState avoids polluting browser history on every
   // chat-refine.
   useEffect(() => {
-    if (!project?.document) return;
+    if (!project) return;
     if (restoredFromHashRef.current) {
       restoredFromHashRef.current = false;
       return;
     }
+    const doc = project.document;
     let cancelled = false;
     (async () => {
-      const hash = await encode(project.document!);
+      const hash = await encode(doc);
       if (cancelled) return;
       window.history.replaceState(null, "", `#${hash}`);
     })();

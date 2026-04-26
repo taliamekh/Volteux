@@ -91,7 +91,7 @@ export default function HeroPanel({
             <div className="blurb">{sel.desc}</div>
             <div className="pin-list">
               {sel.qty > 1 ? `${sel.qty}× ` : ""}
-              {sel.sku}
+              SKU {sel.sku}
             </div>
           </div>
         )}

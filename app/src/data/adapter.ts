@@ -112,11 +112,13 @@ function mapWireColor(color: SchemaWireColor | undefined): WireColor {
       return "blue";   // closest UI palette match
     default: {
       // Exhaustiveness guard: if a future schema adds a new wire_color enum
-      // value, this assignment fails at compile time until the new branch
-      // is added above. Replaces the old "string | undefined → blue"
-      // catch-all that silently masked schema drift.
+      // value, the compile-time check (`color: never`) fails until the new
+      // branch is added above. Throws at runtime as a defense-in-depth match
+      // for the pipeline's `assertNeverCompileGateFailureKind` pattern — a
+      // never-return form would silently leak the unknown enum value through
+      // the type system, contradicting CLAUDE.md "no silent failures".
       const _exhaustive: never = color;
-      return _exhaustive;
+      throw new Error(`Unhandled wire_color enum value: ${String(_exhaustive)}`);
     }
   }
 }

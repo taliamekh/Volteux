@@ -67,9 +67,8 @@ export default function PartsPanel({ project, owned, setOwned }: PartsPanelProps
         </div>
         <button
           className="btn-cart"
-          disabled={allOwned || !project.document}
+          disabled={allOwned}
           onClick={() => {
-            if (!project.document) return;
             window.open(cartUrl(project.document), "_blank", "noopener,noreferrer");
           }}
           style={{ backgroundColor: "rgb(250, 250, 250)" }}
