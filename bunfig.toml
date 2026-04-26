@@ -1,0 +1,11 @@
+# Bun configuration for the Volteux pipeline track.
+# Test runner config; install + runtime defaults.
+
+[test]
+# Increase the default timeout — integration tests in Units 7, 8, 10 hit the
+# real Anthropic API + local compile server and can run several seconds.
+timeout = 30000
+
+# Coverage during local runs is informational; the v0.5 eval harness will be
+# the authoritative quality bar.
+coverage = false

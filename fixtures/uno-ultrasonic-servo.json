@@ -1,0 +1,75 @@
+{
+  "archetype_id": "uno-ultrasonic-servo",
+  "board": {
+    "sku": "50",
+    "name": "Arduino Uno R3",
+    "type": "uno",
+    "fqbn": "arduino:avr:uno"
+  },
+  "components": [
+    { "id": "u1", "sku": "50", "quantity": 1 },
+    { "id": "s1", "sku": "3942", "quantity": 1 },
+    { "id": "a1", "sku": "169", "quantity": 1 },
+    { "id": "b1", "sku": "239", "quantity": 1 },
+    { "id": "w1", "sku": "758", "quantity": 1 }
+  ],
+  "connections": [
+    {
+      "from": { "component_id": "s1", "pin_label": "VCC" },
+      "to": { "component_id": "u1", "pin_label": "5V" },
+      "purpose": "Power the ultrasonic sensor",
+      "wire_color": "red"
+    },
+    {
+      "from": { "component_id": "s1", "pin_label": "GND" },
+      "to": { "component_id": "u1", "pin_label": "GND" },
+      "purpose": "Ground the ultrasonic sensor",
+      "wire_color": "black"
+    },
+    {
+      "from": { "component_id": "s1", "pin_label": "Trig" },
+      "to": { "component_id": "u1", "pin_label": "7" },
+      "purpose": "Send a chirp trigger from the Arduino to the sensor",
+      "wire_color": "yellow"
+    },
+    {
+      "from": { "component_id": "s1", "pin_label": "Echo" },
+      "to": { "component_id": "u1", "pin_label": "8" },
+      "purpose": "Read the echo timing back into the Arduino",
+      "wire_color": "blue"
+    },
+    {
+      "from": { "component_id": "a1", "pin_label": "VCC" },
+      "to": { "component_id": "u1", "pin_label": "5V" },
+      "purpose": "Power the servo (the Uno can drive one small servo directly)",
+      "wire_color": "red"
+    },
+    {
+      "from": { "component_id": "a1", "pin_label": "GND" },
+      "to": { "component_id": "u1", "pin_label": "GND2" },
+      "purpose": "Ground the servo",
+      "wire_color": "black"
+    },
+    {
+      "from": { "component_id": "a1", "pin_label": "Signal" },
+      "to": { "component_id": "u1", "pin_label": "9" },
+      "purpose": "Drive the servo angle from a PWM-capable pin",
+      "wire_color": "orange"
+    }
+  ],
+  "breadboard_layout": {
+    "components": [
+      { "component_id": "u1", "anchor_hole": "a1", "rotation": 0 },
+      { "component_id": "s1", "anchor_hole": "e10", "rotation": 0 },
+      { "component_id": "a1", "anchor_hole": "e20", "rotation": 0 }
+    ]
+  },
+  "sketch": {
+    "main_ino": "#include <Servo.h>\n\nconst int TRIG_PIN = 7;\nconst int ECHO_PIN = 8;\nconst int SERVO_PIN = 9;\nconst int CLOSE_DISTANCE_CM = 25;\n\nServo waveServo;\n\nvoid setup() {\n  Serial.begin(9600);\n  pinMode(TRIG_PIN, OUTPUT);\n  pinMode(ECHO_PIN, INPUT);\n  waveServo.attach(SERVO_PIN);\n  waveServo.write(90);\n}\n\nlong readDistanceCm() {\n  digitalWrite(TRIG_PIN, LOW);\n  delayMicroseconds(2);\n  digitalWrite(TRIG_PIN, HIGH);\n  delayMicroseconds(10);\n  digitalWrite(TRIG_PIN, LOW);\n  long durationUs = pulseIn(ECHO_PIN, HIGH, 30000);\n  if (durationUs == 0) return -1;\n  return durationUs / 58;\n}\n\nvoid wave() {\n  for (int angle = 60; angle <= 120; angle += 5) {\n    waveServo.write(angle);\n    delay(15);\n  }\n  for (int angle = 120; angle >= 60; angle -= 5) {\n    waveServo.write(angle);\n    delay(15);\n  }\n}\n\nvoid loop() {\n  long cm = readDistanceCm();\n  if (cm > 0 && cm < CLOSE_DISTANCE_CM) {\n    wave();\n  }\n  delay(100);\n}\n",
+    "libraries": ["Servo"]
+  },
+  "external_setup": {
+    "needs_wifi": false,
+    "needs_aio_credentials": false
+  }
+}

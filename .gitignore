@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Bun
+bun.lockb
+
+# Env (real secrets — only .env.example is committed)
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Pipeline runtime artifacts (Unit 9 trace.ts writes here; eval consumer reads via explicit path)
+traces/
+traces-raw/
+
+# Spike report directory (Unit 2 writes here; treat as scratch)
+docs/spikes/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code session artifacts (already gitignored at parent .claude/, but explicit)
+.claude/scheduled_tasks.lock
+
+# Compound-engineering review/run artifacts (per-run scratch directory)
+.context/
