@@ -44,20 +44,50 @@ export function extractMessage(err: unknown): string {
 }
 
 /**
- * Detect whether a thrown value is the "JSON.parse failed" or "Zod
- * safeParse failed" path produced by `makeOutputFormat().parse`. The SDK
- * wraps these throws with `AnthropicError("Failed to parse structured
- * output: <inner.message>")`. We rely on the prefix.
+ * The exact prefix the SDK uses when wrapping our `outputFormat.parse`
+ * throws. Sourced verbatim from
+ * `node_modules/@anthropic-ai/sdk/lib/parser.js`:
  *
- * NOTE: this prefix is part of an upstream SDK contract. If the SDK
- * changes the wrapper text, the parse-vs-other-error split breaks
- * silently. Keeping the prefix dependency for now (round 1 fix) — if
- * the SDK ever ships a typed `StructuredOutputParseError` class, switch
- * to `instanceof` and delete this comment.
+ *   throw new AnthropicError(`Failed to parse structured output: ${error}`);
+ *
+ * The prefix is part of an upstream SDK contract that has no typed
+ * carrier class as of `@anthropic-ai/sdk@0.91.1` (verified by reading
+ * `node_modules/@anthropic-ai/sdk/core/error.d.ts` — only `AnthropicError`,
+ * `APIError`, and HTTP-status-specific subclasses exist; no
+ * `StructuredOutputParseError` or similar).
+ *
+ * Defense-in-depth this string detection requires:
+ *   1. **Pin `~0.91.1`** in `package.json` (not `^0.91.1`). The tilde
+ *      range allows patch upgrades only (0.91.x) — no surprise minor
+ *      bump that could change the wrapper string.
+ *   2. **Regression test** in `tests/llm/sdk-helpers.test.ts`
+ *      constructs a real `AnthropicError` with this exact prefix and
+ *      asserts `isStructuredOutputParseError` returns true. A future
+ *      SDK that changes the prefix would still pass tsc but fail this
+ *      test — visible breakage.
+ *   3. **Layer 1 (instanceof) when available.** If a future SDK ships a
+ *      typed `StructuredOutputParseError` class, switch the body to
+ *      prefer `err instanceof StructuredOutputParseError` first and
+ *      fall back to the prefix check. Today only the prefix-string
+ *      detection exists.
+ */
+const STRUCTURED_OUTPUT_PARSE_ERROR_PREFIX =
+  "Failed to parse structured output";
+
+/**
+ * Detect whether a thrown value is the "JSON.parse failed" or "Zod
+ * safeParse failed" path produced by `makeOutputFormat().parse`. See
+ * `STRUCTURED_OUTPUT_PARSE_ERROR_PREFIX` for the upstream contract and
+ * the defense-in-depth measures (version pin + regression test) that
+ * back this detection.
  */
 export function isStructuredOutputParseError(err: unknown): boolean {
+  // Layer 1 — typed class check. Today the SDK has no typed
+  // `StructuredOutputParseError`; if a future SDK introduces one, the
+  // `instanceof` check should go HERE before the prefix fallback.
+  // Leaving this comment as a guidepost for the next contributor.
   if (err instanceof AnthropicError) {
-    return err.message.startsWith("Failed to parse structured output");
+    return err.message.startsWith(STRUCTURED_OUTPUT_PARSE_ERROR_PREFIX);
   }
   return false;
 }
