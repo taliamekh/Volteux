@@ -95,19 +95,21 @@ export async function computeToolchainVersionHash(): Promise<string> {
 /**
  * Stable cache key.
  *
- * Sorting `additional_files` and `libraries` is essential — Object.keys
- * ordering happens to be insertion-preserving in V8/Bun for string keys, but
- * the contract is "sorted before hashing" so the same logical input always
- * produces the same key regardless of insertion order.
+ * EVERY field is serialized via `JSON.stringify` and the entire input is
+ * folded into one canonical JSON string before hashing. The previous
+ * approach used `JSON.stringify` only on `additional_files` and `libraries`
+ * with raw `\0` separators between the scalar fields (toolchainHash, fqbn,
+ * main_ino) — round-2 review surfaced a verified NUL-collision regression
+ * (cross-reviewer: correctness + adversarial + security): `fqbn='a\0b' +
+ * main_ino='X'` produced the same SHA-256 as `fqbn='a' + main_ino='b\0X'`,
+ * because `z.string().min(1)` accepts NUL bytes and arduino-cli's
+ * `Bun.spawn` argv NUL-truncates the FQBN to 'a' so the malicious input
+ * still compiles successfully and poisons the cache.
  *
- * Serialization uses `JSON.stringify(Object.fromEntries(sorted))` rather
- * than a `\0`-delimited join. The delimited form was reachable for cache
- * collisions when an `additional_files` value happened to contain a literal
- * NUL byte (verified by adversarial review): one entry `{a.h: "x\0b.h\0y"}`
- * produced the same hash bytes as two entries `{a.h:"x", b.h:"y"}`. Filename
- * KEYS are guarded by `validateAdditionalFileName`, but values are
- * `z.string()` and accept arbitrary bytes. JSON.stringify is unambiguous
- * about structure regardless of value content.
+ * Sorting `additional_files` and `libraries` is essential — the contract
+ * is "sorted before hashing" so the same logical input produces the same
+ * key regardless of insertion order. We rebuild `additional_files` via
+ * `Object.fromEntries(sorted)` so the JSON output is deterministic.
  */
 export function cacheKey(input: CacheKeyInput): string {
   const additionalSorted = Object.fromEntries(
@@ -117,16 +119,20 @@ export function cacheKey(input: CacheKeyInput): string {
   );
   const librariesSorted = [...input.libraries].sort();
 
+  // ALL fields go through JSON.stringify. A single canonical JSON object
+  // is structurally unambiguous regardless of value content (NUL bytes,
+  // structural characters, etc.). The previous \0-delimited approach
+  // mixed serialization styles and was the bug.
+  const canonical = JSON.stringify({
+    toolchainHash: input.toolchainHash,
+    fqbn: input.fqbn,
+    main_ino: input.main_ino,
+    additional_files: additionalSorted,
+    libraries: librariesSorted,
+  });
+
   const hash = createHash("sha256");
-  hash.update(input.toolchainHash);
-  hash.update("\0");
-  hash.update(input.fqbn);
-  hash.update("\0");
-  hash.update(input.main_ino);
-  hash.update("\0");
-  hash.update(JSON.stringify(additionalSorted));
-  hash.update("\0");
-  hash.update(JSON.stringify(librariesSorted));
+  hash.update(canonical);
   return `${input.toolchainHash.slice(0, 8)}-${hash.digest("hex")}`;
 }
 

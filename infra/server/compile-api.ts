@@ -6,23 +6,30 @@
  *
  * Auth: `Authorization: Bearer <COMPILE_API_SECRET>`. Server REFUSES TO
  * START unless the secret is at least 32 bytes — prevents the "test"
- * placeholder from ever shipping past local dev.
+ * placeholder from ever shipping past local dev. Custom 401/400 hooks on
+ * the bearer middleware emit the same `{ok:false, error, message}`
+ * envelope as every other server response (round-2 AC-009: round-1
+ * shipped Hono's plain-text "Unauthorized" default).
  *
  * Rate limit: a small in-process token bucket (10 req / 60s per secret).
- * v0.1 ships with one secret per environment so this is effectively a
- * global rate limit; v0.2 deploy will key on Bearer secret + per-IP.
+ * The check runs as a route-level middleware BEFORE `zValidator` so an
+ * invalid-body flood does NOT escape the rate limit while still
+ * triggering Bun-side body buffering (round-2 ADV-R2-003).
  *
  * Concurrency: `pLimit(2)` matches CX22's vCPU count; concurrent requests
  * queue rather than thrash arduino-cli. The queue is depth-capped at
- * MAX_QUEUE_DEPTH; bursts past the cap return 503 immediately rather
- * than building a graveyard queue past the client-side timeout
- * (PERF-003 + REL-003).
+ * MAX_QUEUE_DEPTH; the cap is checked AFTER the cache lookup so cache
+ * hits never count against it AND there's no async yield between the
+ * check and `compileLimit(...)` enqueue (round-2 COR-R2-001 closed the
+ * TOCTOU race the round-1 cap had).
  *
  * Logger discipline: NEVER log the Authorization header, the API secret,
  * `process.env`, or any request body field that could carry secrets. The
  * Hono logger middleware is intentionally NOT enabled. The custom
- * `app.onError` hook (SEC-HONO-500-001) writes a single redacted line
- * to stderr and returns a generic 500 body to the client.
+ * `app.onError` hook writes a single redacted line to stderr and returns
+ * a generic 500 body; HTTPException is short-circuited via
+ * `err.getResponse()` so middleware-thrown statuses (auth 401, etc.)
+ * keep their semantic codes.
  *
  * Filename allowlist: imports `validateAdditionalFileName` from the
  * pipeline-side library-allowlist module. Single source of truth — the
@@ -31,13 +38,13 @@
  * sites, not from defining it twice. (Two literal copies were the bug
  * SEC-002 + ADV-003 demonstrated.)
  *
- * Testability (F-003): the module exports `buildApp(deps)` and
- * `startServer()`. `buildApp` accepts dependency injection so unit tests
- * can stub the toolchain hash, cache, and arduino-cli invocation
- * without spawning a Docker container or mutating filesystem state.
- * `startServer()` is the binary's entry point and is only invoked when
- * `import.meta.main` — importing this module from a test runner does
- * NOT bind a port or compute the toolchain hash.
+ * Testability: `buildApp(deps)` is a pure factory; `startServer()` runs
+ * the side-effecting boot. Test hooks (rateLimitState, compileLimit
+ * overrides) live in an `_internalTestHooks` parameter that callers in
+ * production never pass — the type signature itself documents the
+ * intent (round-2 M2-002 / R2-K-004 / AC-012: round-1 shipped these
+ * hooks on a public `BuildAppOptions` interface that no test actually
+ * used).
  */
 
 import { Hono } from "hono";
@@ -45,11 +52,9 @@ import { HTTPException } from "hono/http-exception";
 import { bearerAuth } from "hono/bearer-auth";
 import { zValidator } from "@hono/zod-validator";
 import pLimit from "p-limit";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import {
-  validateAdditionalFileName,
-  type FilenameRejectionKind,
-} from "../../pipeline/gates/library-allowlist.ts";
+import { validateAdditionalFileName } from "../../pipeline/gates/library-allowlist.ts";
 import {
   cacheDirSize,
   cacheGet,
@@ -77,8 +82,13 @@ const COMPILE_CONCURRENCY = 2;
  * 30s AbortController; the cap stops that before tail requests time out
  * server-side. 6 = 2 active + 4 pending; tail request waits ≤4 × 8s ≈
  * 32s, just past the client cap, so anything beyond fails fast instead.
+ *
+ * Round-2 raised the documented `Retry-After` from 5s to 30s — at
+ * MAX_QUEUE_DEPTH=6 the realistic drain is ~30s, and Retry-After: 5 was
+ * encouraging agent retry storms (AN-R2-005).
  */
 const MAX_QUEUE_DEPTH = 6;
+const QUEUE_FULL_RETRY_AFTER_S = 30;
 
 // ---------------------------------------------------------------------------
 // Request schema
@@ -110,26 +120,27 @@ export interface CompileApiDeps {
    * Liveness probe — return false to make GET /api/health respond 503.
    * Production: noop returning true. Tests: stub to simulate degraded
    * states (cache unwritable, AVR core gone) without producing them.
+   * Round-2 REL-007: implementations that THROW are caught and treated
+   * as `false` (degraded) rather than propagating to a 500.
    */
   isHealthy: () => boolean | Promise<boolean>;
-}
-
-export interface BuildAppOptions {
-  /**
-   * Override the in-memory rate limit map (test-only). Default: a fresh
-   * Map() per app build. Tests pass a shared map to assert window math.
-   */
-  rateLimitState?: Map<string, RateLimitState>;
-  /**
-   * Override the p-limit instance (test-only). Default: `pLimit(2)`.
-   * Tests pass `pLimit(1)` to make queue depth easier to assert.
-   */
-  compileLimit?: ReturnType<typeof pLimit>;
 }
 
 interface RateLimitState {
   count: number;
   resetAt: number; // epoch ms
+}
+
+/**
+ * Test-only hooks. Production callers MUST NOT pass this — the
+ * underscore-prefix + this docstring + the lack of an `export` on the
+ * type itself signal that. Tests construct the bundle inline at the
+ * `buildApp` call site so a future production caller can't accidentally
+ * import a public test-only type (round-2 M2-002 / R2-K-004 / AC-012).
+ */
+interface InternalTestHooks {
+  rateLimitState?: Map<string, RateLimitState>;
+  compileLimit?: ReturnType<typeof pLimit>;
 }
 
 function takeFromBucket(
@@ -155,31 +166,49 @@ function takeFromBucket(
  * Build a Hono app wired to the given dependencies. Pure: no side
  * effects beyond constructing routes. Used by `startServer()` in
  * production and by integration tests via `app.request()`.
+ *
+ * The optional second parameter (`_internalTestHooks`) is intentionally
+ * not exported and not documented as part of the production contract.
+ * Production callers in `startServer()` omit it entirely.
  */
-export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono {
-  const rateLimitState = opts.rateLimitState ?? new Map<string, RateLimitState>();
-  const compileLimit = opts.compileLimit ?? pLimit(COMPILE_CONCURRENCY);
+export function buildApp(
+  deps: CompileApiDeps,
+  _internalTestHooks: InternalTestHooks = {},
+): Hono {
+  const rateLimitState =
+    _internalTestHooks.rateLimitState ?? new Map<string, RateLimitState>();
+  const compileLimit =
+    _internalTestHooks.compileLimit ?? pLimit(COMPILE_CONCURRENCY);
 
   const app = new Hono();
 
   // SEC-HONO-500-001 — suppress stack traces from the response body and
   // write a redacted single-line message to stderr. NEVER include the
   // full error object (which Bun's default would format with stack) in
-  // either output.
+  // either output. Each request gets a short correlation ID echoed in
+  // both the stderr line and the 500 body so an operator can correlate
+  // (round-2 AN-R2-003).
   //
   // HTTPException (thrown by bearer-auth and other Hono middleware to
-  // signal status + body) is intentionally NOT remapped — it carries
-  // the right status (401, 403, etc.) and a known-safe body. Calling
-  // err.getResponse() returns that response unchanged.
+  // signal status + body) is intentionally NOT remapped — the bearer
+  // middleware's hooks (configured below) already emit the standard
+  // envelope, so HTTPException carries that envelope and getResponse()
+  // returns it unchanged.
   app.onError((err, c) => {
     if (err instanceof HTTPException) {
       return err.getResponse();
     }
+    const requestId = randomUUID().slice(0, 8);
     process.stderr.write(
-      `[compile-api] unhandled exception: ${(err as Error).message}\n`,
+      `[compile-api] unhandled exception (request_id=${requestId}): ${(err as Error).message}\n`,
     );
     return c.json(
-      { ok: false, error: "internal-error", message: "internal server error" },
+      {
+        ok: false,
+        error: "internal-error",
+        message: "internal server error",
+        request_id: requestId,
+      },
       500,
     );
   });
@@ -188,9 +217,19 @@ export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono
   // AC-005 — degraded state returns 503 so liveness probes (smoke
   // pre-flight, future load balancer) catch a server that started but
   // has lost its dependencies (cache unwritable, AVR core evicted via
-  // volume mount).
+  // volume mount). Round-2 REL-007: an isHealthy implementation that
+  // throws is caught here and treated as degraded — load balancers
+  // expect 503 (shed) not 500 (process broken / restart) for a server
+  // that's up but unhealthy.
   app.get("/api/health", async (c) => {
-    const healthy = await deps.isHealthy();
+    let healthy = false;
+    try {
+      healthy = await deps.isHealthy();
+    } catch (err) {
+      process.stderr.write(
+        `[compile-api] WARN: isHealthy() threw, treating as degraded: ${(err as Error).message}\n`,
+      );
+    }
     if (!healthy) {
       return c.json(
         {
@@ -204,15 +243,62 @@ export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono
     return c.json({ ok: true, toolchain_version_hash: deps.toolchainHash });
   });
 
-  // All /api/compile routes require Bearer auth.
-  app.use("/api/compile", bearerAuth({ token: deps.bearerSecret }));
+  // All /api/compile routes require Bearer auth. The custom hooks
+  // (round-2 AC-009) override Hono's plain-text 401/400 defaults so
+  // every server response carries the standard `{ok:false, error, ...}`
+  // envelope (discriminator is `ok`, never `success`).
+  app.use(
+    "/api/compile",
+    bearerAuth({
+      token: deps.bearerSecret,
+      noAuthenticationHeader: {
+        message: {
+          ok: false,
+          error: "auth",
+          message: "missing Authorization header",
+        },
+      },
+      invalidAuthenticationHeader: {
+        message: {
+          ok: false,
+          error: "auth",
+          message: "malformed Authorization header",
+        },
+      },
+      invalidToken: {
+        message: {
+          ok: false,
+          error: "auth",
+          message: "invalid bearer token",
+        },
+      },
+    }),
+  );
+
+  // Rate limit MUST run before zValidator (round-2 ADV-R2-003): if
+  // zValidator runs first, an invalid-body flood (large bodies, malformed
+  // JSON) bypasses the rate limit entirely because zValidator returns 400
+  // before the rate-limit handler ever fires.
+  app.use("/api/compile", async (c, next) => {
+    if (c.req.method !== "POST") return next();
+    if (!takeFromBucket(rateLimitState, deps.bearerSecret)) {
+      return c.json(
+        {
+          ok: false,
+          error: "rate-limit",
+          message: `rate limit ${RATE_LIMIT_MAX} req / ${RATE_LIMIT_WINDOW_MS / 1000}s exceeded`,
+        },
+        429,
+      );
+    }
+    return next();
+  });
 
   app.post(
     "/api/compile",
     // Custom hook normalizes Zod's default 400 envelope into the
     // standard `{ok:false, error, ...}` shape every other server
-    // response uses. Discriminator is always `ok`, never `success`.
-    // AC-001.
+    // response uses. AC-001.
     zValidator("json", CompileRequestSchema, (result, c) => {
       if (!result.success) {
         return c.json(
@@ -227,43 +313,9 @@ export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono
       }
     }),
     async (c) => {
-      // Rate limit (in-process, per-secret). v0.1 has one secret per
-      // env so this is effectively a global limit; v0.2 will key on
-      // per-IP too.
-      if (!takeFromBucket(rateLimitState, deps.bearerSecret)) {
-        return c.json(
-          {
-            ok: false,
-            error: "rate-limit",
-            message: `rate limit ${RATE_LIMIT_MAX} req / ${RATE_LIMIT_WINDOW_MS / 1000}s exceeded`,
-          },
-          429,
-        );
-      }
-
-      // Queue-depth shed (PERF-003 + REL-003): pending + active >=
-      // MAX_QUEUE_DEPTH means a tail request would wait past the
-      // client-side timeout. Fail fast with 503 + Retry-After so the
-      // client backs off intelligently rather than the server building
-      // a graveyard queue of abandoned compiles.
-      if (
-        compileLimit.pendingCount + compileLimit.activeCount >=
-        MAX_QUEUE_DEPTH
-      ) {
-        return c.json(
-          {
-            ok: false,
-            error: "queue-full",
-            message: `compile queue at capacity (${MAX_QUEUE_DEPTH}); retry in 5s`,
-          },
-          503,
-          { "Retry-After": "5" },
-        );
-      }
-
       const body = c.req.valid("json");
 
-      // --- Filename allowlist (single source of truth: pipeline/gates/library-allowlist.ts) ---
+      // --- Filename allowlist (single source of truth) ---
       const additional = body.additional_files ?? {};
       for (const filename of Object.keys(additional)) {
         const rejection = validateAdditionalFileName(filename);
@@ -274,7 +326,9 @@ export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono
               error: "filename-allowlist",
               filename,
               reason: rejection.reason,
-              rejection_kind: rejection.kind satisfies FilenameRejectionKind,
+              // W-001: structured rejection class — agent callers switch
+              // on it without parsing free text.
+              rejection_kind: rejection.kind,
             },
             400,
           );
@@ -299,6 +353,29 @@ export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono
           cache_hit: true,
           toolchain_version_hash: deps.toolchainHash,
         });
+      }
+
+      // --- Queue-depth cap (round-2 COR-R2-001 closure) ---
+      // The cap check must run AFTER the cache lookup (so cache hits
+      // skip it entirely) AND immediately before `compileLimit(...)` so
+      // there's no async yield between the check and the enqueue. The
+      // round-1 placement was BEFORE the cache lookup — `await
+      // deps.cacheGet(key)` was an async yield point, and concurrent
+      // requests could all pass the check during the cache-lookup
+      // window before any of them entered the queue.
+      if (
+        compileLimit.pendingCount + compileLimit.activeCount >=
+        MAX_QUEUE_DEPTH
+      ) {
+        return c.json(
+          {
+            ok: false,
+            error: "queue-full",
+            message: `compile queue at capacity (${MAX_QUEUE_DEPTH}); retry in ${QUEUE_FULL_RETRY_AFTER_S}s`,
+          },
+          503,
+          { "Retry-After": String(QUEUE_FULL_RETRY_AFTER_S) },
+        );
       }
 
       // --- Compile under p-limit(2) ---
@@ -340,17 +417,23 @@ export function buildApp(deps: CompileApiDeps, opts: BuildAppOptions = {}): Hono
           }
           // Cache the artifact for next time. REL-001 — wrapped because
           // a throw here was producing a 500 to the client even though
-          // the compile succeeded; the hex was lost and the operator
-          // had no log signal because the request logger is off.
+          // the compile succeeded; the hex was lost. Round-2 COR-R2-004:
+          // the inner `process.stderr.write` is itself wrapped so an
+          // EPIPE on stderr doesn't propagate either.
           try {
             await deps.cachePut(key, {
               hex_b64: compile.hex_b64,
               stderr: compile.stderr,
             });
           } catch (err) {
-            process.stderr.write(
-              `[compile-api] WARN: cachePut(${key}) failed (compile result still returned): ${(err as Error).message}\n`,
-            );
+            try {
+              process.stderr.write(
+                `[compile-api] WARN: cachePut(${key}) failed (compile result still returned): ${(err as Error).message}\n`,
+              );
+            } catch {
+              // stderr is broken; nothing to do but proceed. The hex
+              // result is still returned to the client below.
+            }
           }
           return {
             httpStatus: 200 as const,
@@ -425,7 +508,9 @@ export async function startServer(): Promise<void> {
     // Production liveness — the boot check ASSERTED arduino:avr was
     // present, so as long as the process is running and the cache dir
     // is not size-WARN, we report healthy. v0.2 should add a probe
-    // that re-runs `arduino-cli core list --json` periodically.
+    // that re-runs `arduino-cli core list --json` periodically (and
+    // the round-2 REL-007 try/catch in the route handler ensures a
+    // throw from that probe is treated as 503, not 500).
     isHealthy: () => true,
   });
 

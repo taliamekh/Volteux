@@ -10,11 +10,17 @@
  *   auth          — server returned 401 (bad/missing secret)
  *   bad-request   — server's zValidator rejected the request body (400)
  *   rate-limit    — server returned 429
+ *   queue-full    — server returned 503 with queue-full envelope; the gate
+ *                   surfaces the server's `Retry-After` header value as
+ *                   `retry_after_s` so the orchestrator can honour it
+ *                   (round-2 AN-R2-001 + AC-011: round-1 dropped the
+ *                   header silently and routed 503 to `transport`)
  *   compile-error — 200 with `{ok: false, stderr}` from arduino-cli
  *
- * `transport`/`timeout`/`auth`/`rate-limit` are infra failures Unit 9
- * surfaces without retry. `compile-error` and `bad-request` are worth
- * one repair turn through `generate()`.
+ * `transport`/`timeout`/`auth`/`rate-limit`/`queue-full` are infra
+ * failures Unit 9 surfaces without retry (queue-full is worth a delayed
+ * retry honouring `retry_after_s`). `compile-error` and `bad-request`
+ * are worth one repair turn through `generate()`.
  *
  * Wire contract (server response) uses the SAME hyphenated codes as the
  * TS `kind` literals. The custom `zValidator` hook on the server side
@@ -70,11 +76,13 @@ export interface CompileGateValue {
    * decide whether to invalidate any local cached state. The server
    * exposes this on `/api/health` for cold detection too.
    *
-   * Optional because the server response may omit it (e.g., a malformed
-   * 200 still carrying artifact_b64 — the gate prefers to surface what
-   * it has rather than fail open). W-002.
+   * Required (round-2 AC-013): the server emits this on every success
+   * response (cache hit + cold compile). The Zod schema below enforces
+   * this — a missing `toolchain_version_hash` from the server is a
+   * contract violation surfaced as `kind: "transport"` rather than
+   * silently delivering a CompileGateValue with `undefined` here. W-002.
    */
-  toolchain_version_hash?: string;
+  toolchain_version_hash: string;
 }
 
 export type CompileGateFailureKind =
@@ -83,6 +91,7 @@ export type CompileGateFailureKind =
   | "auth"
   | "bad-request"
   | "rate-limit"
+  | "queue-full"
   | "compile-error";
 
 /**
@@ -99,9 +108,13 @@ const SuccessResponseSchema = z
     artifact_kind: z.string().optional(),
     stderr: z.string().optional(),
     cache_hit: z.boolean().optional(),
-    /** Server emits this on every success response so the orchestrator
-     *  can detect cross-deploy toolchain changes. W-002. */
-    toolchain_version_hash: z.string().optional(),
+    /**
+     * Server emits this on every success response so the orchestrator
+     * can detect cross-deploy toolchain changes. Required (round-2
+     * AC-013): a missing field is a server contract violation, not a
+     * normal case to silently coerce to `undefined`.
+     */
+    toolchain_version_hash: z.string(),
   })
   .passthrough();
 
@@ -117,8 +130,10 @@ const ErrorResponseSchema = z
     /** Present only on `bad-request` 400 from zValidator hook. */
     issues: z.array(z.unknown()).optional(),
     stderr: z.string().optional(),
+    /** Present on `internal-error` 500 — for log correlation (round-2 AN-R2-003). */
+    request_id: z.string().optional(),
   })
-  .passthrough();
+  .strict();
 
 const ResponseEnvelopeSchema = z.union([
   SuccessResponseSchema,
@@ -130,6 +145,9 @@ type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 /**
  * Discriminated failure union — extends `GateResult` with a `kind` field.
  * The orchestrator switches on `kind` to decide retry behavior.
+ *
+ * `retry_after_s` is populated only on `kind: "queue-full"` and reflects
+ * the server's `Retry-After` header value (round-2 AN-R2-001 + AC-011).
  */
 export type CompileGateResult =
   | { ok: true; value: CompileGateValue }
@@ -139,6 +157,7 @@ export type CompileGateResult =
       kind: CompileGateFailureKind;
       message: string;
       errors: ReadonlyArray<string>;
+      retry_after_s?: number;
     };
 
 export interface RunCompileGateOptions {
@@ -232,6 +251,24 @@ export async function runCompileGate(
       errors: [],
     };
   }
+  if (response.status === 503) {
+    // Round-2 AN-R2-001 + AC-011: the server emits 503 with a
+    // {ok:false, error:"queue-full", message} envelope and a
+    // `Retry-After` header. The round-1 gate routed this to a generic
+    // `transport` and silently dropped the header — Unit 9 had no way
+    // to honour the server's backoff hint.
+    const errBody = await parseErrorResponse(response);
+    const retryAfter = parseRetryAfter(response.headers.get("Retry-After"));
+    return {
+      ok: false,
+      severity: "red",
+      kind: "queue-full",
+      message:
+        errBody?.message ?? "compile-api queue is at capacity (503)",
+      errors: [],
+      ...(retryAfter !== undefined ? { retry_after_s: retryAfter } : {}),
+    };
+  }
   if (response.status === 400) {
     const errBody = await parseErrorResponse(response);
     return {
@@ -255,26 +292,35 @@ export async function runCompileGate(
   }
 
   const parsed = await parseEnvelope(response);
-  if (parsed.kind === "non-json") {
-    return {
-      ok: false,
-      severity: "red",
-      kind: "transport",
-      message: "compile-api returned non-JSON 200 response",
-      errors: [],
-    };
-  }
-  if (parsed.kind === "schema-failed") {
-    return {
-      ok: false,
-      severity: "red",
-      kind: "transport",
-      message: `compile-api 200 response failed envelope schema (artifact_b64 missing or malformed): ${parsed.summary}`,
-      errors: [parsed.summary],
-    };
+  // Exhaustive switch — round-2 R2-K-003: the previous if/if/else chain
+  // would silently fall through to `parsed.value` if a future variant
+  // were added to EnvelopeParseResult. assertNeverFailureKind (added in
+  // round 1 but unused) enforces compile-time exhaustiveness.
+  let body: z.infer<typeof ResponseEnvelopeSchema>;
+  switch (parsed.kind) {
+    case "non-json":
+      return {
+        ok: false,
+        severity: "red",
+        kind: "transport",
+        message: "compile-api returned non-JSON 200 response",
+        errors: [],
+      };
+    case "schema-failed":
+      return {
+        ok: false,
+        severity: "red",
+        kind: "transport",
+        message: `compile-api 200 response failed envelope schema: ${parsed.summary || "no specific issue path"}`,
+        errors: [parsed.summary],
+      };
+    case "ok":
+      body = parsed.value;
+      break;
+    default:
+      return assertNeverEnvelopeKind(parsed);
   }
 
-  const body = parsed.value;
   if (!body.ok) {
     return {
       ok: false,
@@ -286,8 +332,8 @@ export async function runCompileGate(
   }
 
   // hex_b64 length is 4*ceil(n/3); decoded bytes ≈ length * 3 / 4 minus
-  // padding. We compute exact decoded bytes via Buffer.from, but stay
-  // off the actual decode hot path on the cache-hit code branch.
+  // padding. We compute the decoded byte count via the formula rather
+  // than allocating a Buffer (telemetry hot path).
   const hex_size_bytes = decodedBase64Length(body.artifact_b64);
 
   return {
@@ -298,15 +344,40 @@ export async function runCompileGate(
       cache_hit: Boolean(body.cache_hit),
       latency_ms: Date.now() - startedAt,
       hex_size_bytes,
+      // toolchain_version_hash is required by SuccessResponseSchema, so
+      // a successful parse guarantees it's present. Type narrowing
+      // confirms it's a string here.
       toolchain_version_hash: body.toolchain_version_hash,
     },
   };
 }
 
 /**
- * Compute the decoded byte length of a base64 string without allocating a
- * Buffer. base64 is 4 chars per 3 bytes; trailing `=` chars subtract
- * decoded bytes. Cheap for the eval-harness telemetry surface (W-002).
+ * Parse the `Retry-After` header. RFC 7231 allows a delay in seconds
+ * (integer) or an HTTP date. Round-2: the server emits seconds, so we
+ * only handle that form. Returns `undefined` if the header is missing,
+ * non-numeric, or negative — the caller surfaces the failure without
+ * `retry_after_s` rather than fabricating a default.
+ */
+function parseRetryAfter(headerValue: string | null): number | undefined {
+  if (!headerValue) return undefined;
+  const parsed = Number.parseInt(headerValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
+/**
+ * Compute the decoded byte length of a base64 string without allocating
+ * a Buffer. Base64 encodes 3 input bytes as 4 output chars; trailing
+ * `=` chars subtract decoded bytes. The formula `len*3/4 - padding`
+ * is exact for valid base64 (length divisible by 4).
+ *
+ * Round-2 M2-005: malformed input (length not divisible by 4 with no
+ * padding) produces a floor-truncated estimate, which is an acceptable
+ * silent degradation since this is a telemetry signal feeding W-002,
+ * not a safety gate. The server always emits valid base64 (Bun's
+ * Buffer.toString('base64') produces canonical output), so the
+ * malformed-input case isn't reachable from the production server.
  */
 function decodedBase64Length(b64: string): number {
   const len = b64.length;
@@ -315,6 +386,20 @@ function decodedBase64Length(b64: string): number {
   if (b64.endsWith("==")) padding = 2;
   else if (b64.endsWith("=")) padding = 1;
   return Math.floor((len * 3) / 4) - padding;
+}
+
+/**
+ * Compile-time exhaustiveness guard for the EnvelopeParseResult union.
+ * Mirrors the pattern of assertNeverFailureKind for CompileGateFailureKind.
+ * Round-2 R2-K-003: the consumer's switch needs this to catch a future
+ * 4th variant at compile time rather than silently falling through to
+ * `parsed.value = undefined`.
+ *
+ * Returns the never-typed value as a CompileGateResult so the consumer's
+ * switch type-checks; in practice unreachable.
+ */
+function assertNeverEnvelopeKind(value: never): CompileGateResult {
+  throw new Error(`Unhandled EnvelopeParseResult kind: ${JSON.stringify(value)}`);
 }
 
 /**

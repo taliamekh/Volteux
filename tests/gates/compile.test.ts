@@ -35,6 +35,7 @@ describe("runCompileGate — happy path", () => {
           artifact_kind: "hex",
           stderr: "",
           cache_hit: false,
+          toolchain_version_hash: "abc123",
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -54,7 +55,12 @@ describe("runCompileGate — happy path", () => {
   test("propagates cache_hit: true when server reports cache hit", async () => {
     const fetchImpl = fakeFetch(() =>
       new Response(
-        JSON.stringify({ ok: true, artifact_b64: "aGV4", cache_hit: true }),
+        JSON.stringify({
+          ok: true,
+          artifact_b64: "aGV4",
+          cache_hit: true,
+          toolchain_version_hash: "abc123",
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
     );
@@ -75,7 +81,7 @@ describe("runCompileGate — happy path", () => {
           ok: true,
           artifact_b64: "aGVsbG8=", // decodes to "hello" (5 bytes)
           cache_hit: false,
-          toolchain_version_hash: "abc123",
+          toolchain_version_hash: "abc123", // required (round-2 AC-013)
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -94,7 +100,11 @@ describe("runCompileGate — happy path", () => {
     }
   });
 
-  test("toolchain_version_hash is undefined when server omits it (gate stays liberal)", async () => {
+  test("toolchain_version_hash is REQUIRED — a server response omitting it is a contract violation routed as kind:'transport'", async () => {
+    // Round-2 AC-013: round-1 made the field optional in the success
+    // schema; the type contract was looser than the wire contract. Now
+    // the schema requires it — a missing field fails the schema parse
+    // and the gate surfaces kind:'transport' with the schema error.
     const fetchImpl = fakeFetch(() =>
       new Response(
         JSON.stringify({ ok: true, artifact_b64: "aGV4", cache_hit: false }),
@@ -106,8 +116,16 @@ describe("runCompileGate — happy path", () => {
       secret: "x".repeat(32),
       fetch: fetchImpl,
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.toolchain_version_hash).toBeUndefined();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("transport");
+      // Zod's union-discriminator failure produces a generic "Invalid
+      // input" summary when the response satisfies neither branch
+      // (success without toolchain_version_hash AND not an error
+      // envelope). The message names the schema failure even when the
+      // exact missing field can't be pinpointed.
+      expect(result.message).toContain("envelope schema");
+    }
   });
 });
 
@@ -273,15 +291,57 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     }
   });
 
-  test("transport (unexpected status): 503 from server is mapped to kind:'transport'", async () => {
-    const fetchImpl = fakeFetch(() => new Response("Service Unavailable", { status: 503 }));
+  test("queue-full: 503 from server is mapped to kind:'queue-full' with retry_after_s parsed from header", async () => {
+    // Round-2 AN-R2-001 + AC-011: round-1 routed all 503s to the
+    // generic transport branch and silently dropped the Retry-After
+    // header. The gate now has an explicit 503 branch that surfaces
+    // queue-full and parses Retry-After.
+    const fetchImpl = fakeFetch(() =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "queue-full",
+          message: "compile queue at capacity (6); retry in 30s",
+        }),
+        {
+          status: 503,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "30",
+          },
+        },
+      ),
+    );
     const result = await runCompileGate(validReq, {
       baseUrl: "http://test",
       secret: "x".repeat(32),
       fetch: fetchImpl,
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.kind).toBe("transport");
+    if (!result.ok) {
+      expect(result.kind).toBe("queue-full");
+      expect(result.retry_after_s).toBe(30);
+      expect(result.message).toContain("retry in 30s");
+    }
+  });
+
+  test("queue-full: 503 with no Retry-After header omits retry_after_s", async () => {
+    const fetchImpl = fakeFetch(() =>
+      new Response(
+        JSON.stringify({ ok: false, error: "queue-full", message: "queued" }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const result = await runCompileGate(validReq, {
+      baseUrl: "http://test",
+      secret: "x".repeat(32),
+      fetch: fetchImpl,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("queue-full");
+      expect(result.retry_after_s).toBeUndefined();
+    }
   });
 
   test("transport (200 non-JSON): malformed response body is mapped to kind:'transport'", async () => {
@@ -312,7 +372,11 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.kind).toBe("transport");
-      expect(result.message).toContain("artifact_b64");
+      // Round-2: schema-failed message no longer hardcodes
+      // "artifact_b64" since toolchain_version_hash is also required
+      // and could be the missing field. The Zod summary names the path
+      // when one is identifiable.
+      expect(result.message).toContain("envelope schema");
     }
   });
 });

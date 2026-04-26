@@ -80,18 +80,28 @@ const HEADER_TO_LIBRARY: Readonly<Record<string, string>> = {
  * Strict regex for `additional_files` keys. Filename only: alphanumerics,
  * dot, hyphen, underscore. First character MUST be alphanumeric or
  * underscore (rejects leading dash and leading dot). Extension MUST be one
- * of the four C/C++ source extensions arduino-cli understands. No path
- * separators, no traversal, no leading slash, no empty string.
+ * of the four C/C++ source extensions arduino-cli understands.
  *
  * Consecutive dots like `test..h` are rejected by `validateAdditionalFileName`
  * (a primary check run BEFORE this regex). Do not rely on the regex alone —
  * `[A-Za-z0-9_.-]*` accepts repeated dots.
  *
- * Sandbox bypass surface (arduino-cli #758): `arduino-cli.yaml`, `sketch.json`,
- * `library.properties`, `hardware/platform.txt` would override the platform
- * recipe and execute arbitrary commands. Each is rejected implicitly by the
- * extension allowlist (none ends in `.ino|.h|.cpp|.c`). Do not "simplify" the
- * extension constraint — it is the load-bearing defense against #758.
+ * `.ino` files in additional_files are accepted by THIS regex but
+ * rejected by `validateAdditionalFileName` with `kind:"reserved-name"`
+ * (round-2 ADV-R2-002). arduino-cli compiles ALL `.ino` files in the
+ * sketch directory as ONE translation unit (Arduino IDE's "tabs"
+ * concept), so any `.ino` in additional_files (Sketch.ino, another.ino,
+ * etc.) is a multi-translation-unit injection vector. Routing the
+ * rejection via `reserved-name` rather than `bad-extension` preserves
+ * the agent-switchable semantic — agents can distinguish "you tried to
+ * inject a second sketch" from "you used a wrong extension."
+ *
+ * Sandbox bypass surface (arduino-cli #758): `arduino-cli.yaml`,
+ * `sketch.json`, `library.properties`, `hardware/platform.txt` would
+ * override the platform recipe and execute arbitrary commands. Each is
+ * rejected by `validateAdditionalFileName` with `kind:"sandbox-bypass"`
+ * before the regex check fires (round-2 AN-R2-002 — round-1 collapsed
+ * these into the generic `bad-extension` kind).
  *
  * SINGLE SOURCE OF TRUTH. The Compile API (`infra/server/sketch-fs.ts`)
  * imports this constant + `validateAdditionalFileName`. Defense in depth
@@ -102,7 +112,8 @@ const HEADER_TO_LIBRARY: Readonly<Record<string, string>> = {
  *
  * Origin: scope-guardian + security-lens findings F-004 (initial allowlist);
  * SEC-002 + ADV-003 hardened the leading-character anchor and consecutive-dot
- * rejection (this file's predecessor accepted `-flag.h` and `test..h`).
+ * rejection; ADV-R2-002 added the `.ino`-as-reserved-name primary check
+ * + AN-R2-002 split sandbox-bypass into its own kind.
  */
 export const ADDITIONAL_FILE_NAME_REGEX =
   /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.(ino|h|cpp|c)$/;
@@ -131,6 +142,15 @@ export const ADDITIONAL_FILE_NAME_REGEX =
  * free-text `reason` string. Closes W-001 from the v0.1-pipeline-io
  * review pass.
  *
+ * Round-2 review surfaced two missing kinds that escaped via wider local
+ * unions (M2-004 / R2-K-007 / AC-010 + AN-R2-002): `reserved-name` was
+ * defined locally in `sketch-fs.ts` and emitted over the wire without
+ * appearing in this canonical type; `sandbox-bypass` was collapsed into
+ * `bad-extension` even though sandbox-bypass filenames warrant a distinct
+ * agent-side response. This union now lists ALL six values that the
+ * server can emit; agent-side `switch (kind)` is exhaustive over the
+ * canonical set.
+ *
  *   `empty`             — the name is the empty string
  *   `null-byte`         — POSIX path string with a literal NUL byte
  *   `consecutive-dots`  — `..` anywhere in the name (path traversal /
@@ -138,13 +158,43 @@ export const ADDITIONAL_FILE_NAME_REGEX =
  *   `path-separator`    — `/` or `\` in the name (flat names only)
  *   `bad-extension`     — fails the regex (leading dash, leading dot,
  *                         non-allowed extension, non-alphanumeric chars)
+ *   `sandbox-bypass`    — name explicitly matches an arduino-cli sandbox
+ *                         override surface (`arduino-cli.yaml`,
+ *                         `sketch.json`, `library.properties`,
+ *                         `platform.txt`, etc.); reported separately so
+ *                         agents can surface to operator immediately
+ *                         rather than feeding to LLM auto-repair
+ *   `reserved-name`     — name would overwrite a reserved filesystem
+ *                         entry the server creates (e.g., `sketch.ino`
+ *                         main sketch). Wider context: `sketch-fs.ts`.
  */
 export type FilenameRejectionKind =
   | "empty"
   | "null-byte"
   | "consecutive-dots"
   | "path-separator"
-  | "bad-extension";
+  | "bad-extension"
+  | "sandbox-bypass"
+  | "reserved-name";
+
+/**
+ * Known arduino-cli sandbox override surfaces. Each is structurally
+ * blocked by the extension allowlist regex (none ends in `.h|.cpp|.c`),
+ * but emitting `sandbox-bypass` instead of `bad-extension` gives agent
+ * callers a discrete signal that a known dangerous name was attempted.
+ *
+ * Origin: arduino-cli #758 sandbox bypass. Round-2 AN-R2-002 split this
+ * out from the generic bad-extension catch-all.
+ */
+const SANDBOX_BYPASS_NAMES = new Set([
+  "arduino-cli.yaml",
+  "sketch.json",
+  "sketch.yaml",
+  "library.properties",
+  "platform.txt",
+  "boards.txt",
+  "programmers.txt",
+]);
 
 /**
  * Structured result of a filename allowlist check.
@@ -192,6 +242,27 @@ export function validateAdditionalFileName(
   // Note: a `startsWith("/")` check used to live here as a "leading slash"
   // guard but it is unreachable — any name beginning with "/" contains "/"
   // and is caught by the path-separator check above.
+  // Known sandbox-bypass surfaces — emit a distinct kind so agents can
+  // surface to operator immediately rather than feeding to LLM auto-repair.
+  // Comparison is case-insensitive (some filesystems are case-insensitive
+  // and `Arduino-cli.yaml` would still be processed by arduino-cli).
+  if (SANDBOX_BYPASS_NAMES.has(name.toLowerCase()))
+    return {
+      kind: "sandbox-bypass",
+      reason: `${name} is a known arduino-cli sandbox-override surface`,
+    };
+  // ADV-R2-002 — reject any `.ino` in additional_files as a reserved
+  // name. arduino-cli compiles ALL `.ino` files in the sketch directory
+  // as one translation unit, so `Sketch.ino`, `another.ino`, `foo.INO`,
+  // etc. are all multi-translation-unit injection vectors. Comparison
+  // is case-insensitive — some filesystems case-fold and arduino-cli
+  // treats both `.ino` and `.INO` as compilable.
+  if (name.toLowerCase().endsWith(".ino"))
+    return {
+      kind: "reserved-name",
+      reason:
+        "additional_files cannot include .ino files (arduino-cli would compile them as additional translation units; the main sketch is the single sketch_main_ino field)",
+    };
   if (!ADDITIONAL_FILE_NAME_REGEX.test(name))
     return {
       kind: "bad-extension",

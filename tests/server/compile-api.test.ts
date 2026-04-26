@@ -28,6 +28,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import pLimit from "p-limit";
 import {
   buildApp,
   type CompileApiDeps,
@@ -279,6 +280,133 @@ describe("POST /api/compile — rate limit", () => {
     }
     // 11th gets rate limited
     const res = await postCompile(app, validBody);
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("rate-limit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Queue-depth cap (round-2 T-007 / COR-R2-002 closure)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/compile — queue-depth cap (PERF-003 + REL-003)", () => {
+  test("requests past MAX_QUEUE_DEPTH return 503 with Retry-After + queue-full envelope", async () => {
+    // Inject pLimit(1) so the depth math is trivial: only 1 active slot,
+    // and the cap triggers at 6 in-flight (active + pending). Suspend
+    // arduino-cli on a shared release signal so the test can free all
+    // queued requests in one go.
+    let releaseAll: () => void = () => {};
+    const releasePromise = new Promise<void>((resolve) => {
+      releaseAll = resolve;
+    });
+    const stub = makeDeps();
+    const blockingDeps: CompileApiDeps = {
+      ...stub.deps,
+      invokeArduinoCli: async () => {
+        await releasePromise;
+        return { ok: true as const, hex_b64: "aGVsbG8=", stderr: "" };
+      },
+    };
+    // Round-2 had to write this test specifically — round-1 added
+    // `compileLimit` to BuildAppOptions for exactly this purpose but no
+    // test ever used it.
+    const app = buildApp(blockingDeps, {
+      compileLimit: pLimit(1),
+    });
+
+    // Fire 6 requests; the 6th saturates the cap at active + pending = 6
+    // (1 active + 5 pending). Don't await them.
+    const inFlight: Array<Promise<Response>> = [];
+    for (let i = 0; i < 6; i++) {
+      inFlight.push(postCompile(app, validBody));
+    }
+    // Yield to the event loop so all 6 enter the pLimit queue before
+    // the 7th request fires its check.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 7th request hits the cap.
+    const overflow = await postCompile(app, validBody);
+    expect(overflow.status).toBe(503);
+    expect(overflow.headers.get("Retry-After")).toBe("30");
+    const body = (await overflow.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("queue-full");
+
+    // Release ALL queued requests at once so the test doesn't hang.
+    releaseAll();
+    await Promise.all(inFlight);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-2 isHealthy throws → 503 (REL-007)
+// ---------------------------------------------------------------------------
+
+describe("GET /api/health — isHealthy throw → 503 (REL-007)", () => {
+  test("isHealthy that throws is treated as degraded, not 500", async () => {
+    const { deps } = makeDeps();
+    const throwingDeps: CompileApiDeps = {
+      ...deps,
+      isHealthy: () => {
+        throw new Error("simulated probe failure");
+      },
+    };
+    const app = buildApp(throwingDeps);
+    const res = await app.request("/api/health");
+    // Round-2: round-1 would return 500 here (uncaught throw → onError).
+    // Now the route handler catches and returns 503 (degraded).
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("degraded");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-2 401 envelope normalization (AC-009)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/compile — 401 envelope (AC-009)", () => {
+  test("missing header → 401 JSON envelope (not Hono's plain-text default)", async () => {
+    const { deps } = makeDeps();
+    const app = buildApp(deps);
+    const res = await postCompile(app, validBody, null);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Content-Type")).toContain("application/json");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("auth");
+  });
+
+  test("wrong secret → 401 JSON envelope", async () => {
+    const { deps } = makeDeps();
+    const app = buildApp(deps);
+    const res = await postCompile(app, validBody, "Bearer wrongsecret");
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Content-Type")).toContain("application/json");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("auth");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-2 zValidator vs rate-limit ordering (ADV-R2-003)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/compile — invalid-body floods consume rate-limit tokens (ADV-R2-003)", () => {
+  test("11 invalid-body requests still get rate-limited (round-1: rate-limit ran AFTER zValidator and invalid bodies bypassed it)", async () => {
+    const { deps } = makeDeps();
+    const app = buildApp(deps);
+    // First 10 invalid-body requests consume rate-limit tokens AND get
+    // rejected by zValidator with 400.
+    for (let i = 0; i < 10; i++) {
+      const res = await postCompile(app, { fqbn: "" });
+      expect(res.status).toBe(400);
+    }
+    // 11th gets rate-limited BEFORE zValidator — proves the middleware
+    // ordering fix (rate-limit middleware runs first now).
+    const res = await postCompile(app, { fqbn: "" });
     expect(res.status).toBe(429);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.error).toBe("rate-limit");

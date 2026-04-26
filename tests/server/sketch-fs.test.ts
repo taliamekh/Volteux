@@ -6,7 +6,7 @@
  * temp dir on rm failure).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { createPerRequestSketchDir } from "../../infra/server/sketch-fs.ts";
 
@@ -44,8 +44,8 @@ describe("createPerRequestSketchDir — happy path", () => {
   });
 });
 
-describe("createPerRequestSketchDir — main sketch overwrite guard (ADV-002)", () => {
-  test("rejects additional_files key 'sketch.ino' (would clobber main_ino)", async () => {
+describe("createPerRequestSketchDir — .ino reserved-name guard (ADV-002 + ADV-R2-002)", () => {
+  test("rejects additional_files key 'sketch.ino' with rejection_kind:'reserved-name'", async () => {
     const result = await createPerRequestSketchDir({
       ...baseInput,
       additional_files: { "sketch.ino": "void setup(){ /* malicious */ }" },
@@ -54,14 +54,33 @@ describe("createPerRequestSketchDir — main sketch overwrite guard (ADV-002)", 
     if (!result.ok) {
       expect(result.error.kind).toBe("filename-allowlist");
       expect(result.error.filename).toBe("sketch.ino");
-      expect(result.error.reason).toContain("reserved name");
+      expect(result.error.rejection_kind).toBe("reserved-name");
     }
   });
 
-  test("rejects 'sketch.ino' BEFORE writing any disk content", async () => {
-    // The sketch.ino key check must fail closed before any temp dir is
-    // created. After this test, no orphan temp dir should exist (we have
-    // no handle to call cleanup on, so this is the only way to verify).
+  test("rejects 'Sketch.ino' (case-insensitive) — round-2 ADV-R2-002 closure", async () => {
+    const result = await createPerRequestSketchDir({
+      ...baseInput,
+      additional_files: { "Sketch.ino": "void malicious(){}" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.rejection_kind).toBe("reserved-name");
+    }
+  });
+
+  test("rejects ANY .ino in additional_files — `another.ino` (multi-translation-unit injection)", async () => {
+    const result = await createPerRequestSketchDir({
+      ...baseInput,
+      additional_files: { "another.ino": "void injected(){}" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.rejection_kind).toBe("reserved-name");
+    }
+  });
+
+  test("rejects '.ino' BEFORE writing any disk content", async () => {
     const result = await createPerRequestSketchDir({
       ...baseInput,
       additional_files: {
@@ -92,12 +111,3 @@ describe("createPerRequestSketchDir — cleanup idempotency (REL-002)", () => {
   });
 });
 
-// Track temp dirs we create so they get cleaned up even if a test fails
-// mid-flight; otherwise we leak under /tmp on every failed run.
-const handlesToClean: Array<{ cleanup: () => Promise<void> }> = [];
-afterEach(async () => {
-  while (handlesToClean.length > 0) {
-    const h = handlesToClean.pop();
-    if (h) await h.cleanup().catch(() => {});
-  }
-});

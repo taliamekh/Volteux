@@ -116,7 +116,9 @@ describe("ADDITIONAL_FILE_NAME_REGEX", () => {
 describe("validateAdditionalFileName (the predicate the Compile API also imports)", () => {
   test("returns null on a clean filename", () => {
     expect(validateAdditionalFileName("foo.h")).toBeNull();
-    expect(validateAdditionalFileName("a.b.ino")).toBeNull();
+    // Round-2 ADV-R2-002: any .ino is now reserved-name. Switched to .h
+    // for the multi-dot-stem boundary case (still important for ADV-003).
+    expect(validateAdditionalFileName("a.b.h")).toBeNull();
   });
 
   test("rejects empty string with a clear reason and kind", () => {
@@ -184,42 +186,75 @@ describe("validateAdditionalFileName (the predicate the Compile API also imports
     expect(rejection?.reason).toContain("does not match");
   });
 
-  test("rejects double-dash `--no-color.ino` (SEC-002)", () => {
-    const rejection = validateAdditionalFileName("--no-color.ino");
+  test("rejects double-dash `--no-color.h` (SEC-002)", () => {
+    // Switched extension from .ino to .h since round-2 routes any .ino
+    // to reserved-name; this test still exercises the leading-dash
+    // bypass surface that SEC-002 fixed.
+    const rejection = validateAdditionalFileName("--no-color.h");
     expect(rejection?.kind).toBe("bad-extension");
   });
 
   // Sandbox bypass surface (arduino-cli #758): each is rejected by the
   // extension check (none ends in .ino|.h|.cpp|.c). These tests document
   // *why* the extension constraint must not be relaxed.
-  test("rejects sandbox bypass: arduino-cli.yaml (#758)", () => {
+  // Round-2 AN-R2-002: sandbox-bypass surfaces now get their own
+  // `kind` so agents can route them differently from generic typos.
+  test("rejects sandbox bypass: arduino-cli.yaml (#758) with kind:'sandbox-bypass'", () => {
     expect(validateAdditionalFileName("arduino-cli.yaml")?.kind).toBe(
-      "bad-extension",
+      "sandbox-bypass",
     );
   });
 
-  test("rejects sandbox bypass: sketch.json (#758)", () => {
+  test("rejects sandbox bypass: sketch.json (#758) with kind:'sandbox-bypass'", () => {
     expect(validateAdditionalFileName("sketch.json")?.kind).toBe(
-      "bad-extension",
+      "sandbox-bypass",
     );
   });
 
-  test("rejects sandbox bypass: library.properties (#758)", () => {
+  test("rejects sandbox bypass: library.properties (#758) with kind:'sandbox-bypass'", () => {
     expect(validateAdditionalFileName("library.properties")?.kind).toBe(
-      "bad-extension",
+      "sandbox-bypass",
     );
   });
 
-  test("rejects sandbox bypass: platform.txt (#758)", () => {
+  test("rejects sandbox bypass: platform.txt (#758) with kind:'sandbox-bypass'", () => {
     expect(validateAdditionalFileName("platform.txt")?.kind).toBe(
-      "bad-extension",
+      "sandbox-bypass",
     );
   });
 
-  test("returns null for legitimate boundary case `a.b.ino` (single dots in stem)", () => {
+  // Round-2 ADV-R2-002: any .ino in additional_files is rejected as
+  // reserved-name (arduino-cli compiles all .ino as one translation
+  // unit; the main sketch is the single sketch_main_ino field).
+  test("rejects `.ino` files as reserved-name — sketch.ino (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("sketch.ino")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("rejects `.ino` files as reserved-name — Sketch.ino case-insensitive (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("Sketch.ino")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("rejects `.ino` files as reserved-name — another.ino (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("another.ino")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("rejects `.ino` files as reserved-name — foo.INO uppercase (ADV-R2-002)", () => {
+    expect(validateAdditionalFileName("foo.INO")?.kind).toBe(
+      "reserved-name",
+    );
+  });
+
+  test("returns null for legitimate boundary case `a.b.h` (single dots in stem)", () => {
     // Important regression case for the ADV-003 fix: we must reject CONSECUTIVE
-    // dots without rejecting all multi-dot stems.
-    expect(validateAdditionalFileName("a.b.ino")).toBeNull();
+    // dots without rejecting all multi-dot stems. Switched from `.ino` to
+    // `.h` since round-2 routes any `.ino` to reserved-name.
+    expect(validateAdditionalFileName("a.b.h")).toBeNull();
   });
 });
 
@@ -244,22 +279,28 @@ describe("validateAdditionalFileName — predicate parity at the server's call s
       "../../infra/server/sketch-fs.ts"
     );
 
+    // Round-2: predicate now handles ALL rejection classes including
+    // reserved-name (any .ino) and sandbox-bypass. Test inputs cover
+    // all six FilenameRejectionKind values plus the happy path.
     const inputs = [
-      "sketch.ino", // post-fix: rejected (would overwrite main sketch)
       "_internal.h",
-      "1foo.ino",
-      "a.b.ino",
-      "",
-      "-flag.h",
-      ".hidden.h",
-      "test..h",
-      "../etc/passwd",
-      "sub/foo.ino",
-      "sketch\0.ino",
-      "arduino-cli.yaml",
-      "library.properties",
-      "platform.txt",
+      "1foo.h",
+      "a.b.h",
       "extra.cpp",
+      "main.c",
+      "", // empty
+      "-flag.h", // bad-extension (leading dash)
+      ".hidden.h", // bad-extension (leading dot)
+      "test..h", // consecutive-dots
+      "../etc/passwd", // consecutive-dots (catches first)
+      "sub/foo.h", // path-separator
+      "sketch\0.h", // null-byte
+      "arduino-cli.yaml", // sandbox-bypass
+      "library.properties", // sandbox-bypass
+      "platform.txt", // sandbox-bypass
+      "sketch.ino", // reserved-name (.ino in additional_files)
+      "Sketch.ino", // reserved-name (case-insensitive)
+      "another.ino", // reserved-name (any .ino name)
     ];
 
     for (const filename of inputs) {
@@ -268,17 +309,6 @@ describe("validateAdditionalFileName — predicate parity at the server's call s
         main_ino: "void setup(){}\nvoid loop(){}",
         additional_files: { [filename]: "x" },
       });
-
-      if (filename === "sketch.ino") {
-        // Server-side guard layered on top of the predicate (ADV-002).
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error.kind).toBe("filename-allowlist");
-          expect(result.error.filename).toBe(filename);
-          expect(result.error.rejection_kind).toBe("reserved-name");
-        }
-        continue;
-      }
 
       if (direct === null) {
         expect(result.ok).toBe(true);

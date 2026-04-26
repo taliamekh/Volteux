@@ -39,8 +39,16 @@ export type SketchDirError = {
   kind: "filename-allowlist";
   filename: string;
   reason: string;
-  /** Structured rejection class — agent callers switch on this; W-001. */
-  rejection_kind: FilenameRejectionKind | "reserved-name";
+  /**
+   * Structured rejection class — agent callers switch on this; W-001.
+   * Round-2 narrowed the type back to `FilenameRejectionKind` (which now
+   * includes `reserved-name`) so the wire vocabulary matches the type
+   * exported from `pipeline/gates/library-allowlist.ts`. Previously this
+   * widened locally, which let a 6th value escape over the wire that
+   * agents importing `FilenameRejectionKind` would silently miss
+   * (R2-K-007 / M2-004 / AC-010).
+   */
+  rejection_kind: FilenameRejectionKind;
 };
 
 export interface SketchDirHandle {
@@ -64,6 +72,15 @@ export async function createPerRequestSketchDir(
   const additional = input.additional_files ?? {};
 
   // Validate all filenames first (cheap; fail closed before disk I/O).
+  // The predicate (validateAdditionalFileName) handles ALL rejection
+  // classes including:
+  //   - sandbox-bypass (arduino-cli.yaml, sketch.json, etc.)
+  //   - reserved-name (any .ino — round-2 ADV-R2-002 closure)
+  //   - bad-extension, consecutive-dots, path-separator, null-byte, empty
+  // Round-2: the round-1 inline reserved-name guard for `sketch.ino`
+  // was bypassable with `Sketch.ino`. The predicate now catches the
+  // entire class case-insensitively, so this loop has no per-filename
+  // server-side guard beyond the shared predicate.
   for (const filename of Object.keys(additional)) {
     const rejection = validateAdditionalFileName(filename);
     if (rejection !== null) {
@@ -74,22 +91,6 @@ export async function createPerRequestSketchDir(
           filename,
           reason: rejection.reason,
           rejection_kind: rejection.kind,
-        },
-      };
-    }
-    // ADV-002 — reject any additional_files key that would overwrite the main
-    // sketch. `validateAdditionalFileName` accepts "sketch.ino" (it matches
-    // the regex), so without this guard the second writeFile would clobber
-    // input.main_ino and arduino-cli would compile the wrong content while
-    // the caller silently receives the wrong artifact.
-    if (filename === MAIN_SKETCH_FILE) {
-      return {
-        ok: false,
-        error: {
-          kind: "filename-allowlist",
-          filename,
-          reason: `reserved name: would overwrite the main sketch file (${MAIN_SKETCH_FILE})`,
-          rejection_kind: "reserved-name",
         },
       };
     }

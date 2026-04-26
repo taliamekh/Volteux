@@ -1,19 +1,10 @@
 /**
- * Shared helpers for archetype-1 rules.
+ * Shared helper for archetype-1 connection-traversal rules.
  *
- * Two helpers, two distinct call patterns:
- *
- *   1. `resolveEndpoint(doc, endpoint)` — for CONNECTION-TRAVERSAL rules
- *      that walk `doc.connections[]` and need to dereference each
- *      endpoint to {component, entry, pin}. Collapses the three-step
- *      lookup triplet (find → lookupBySku → find-pin) that appeared
- *      verbatim across many rule files (M-002 in the /ce:review pass).
- *
- *   2. `resolveComponent(doc, component_id)` — for connection-traversal
- *      rules that need only {component, entry} for one side WITHOUT a
- *      pin label (e.g., the "I just need to know if this is the MCU"
- *      check). Same backing logic as `resolveEndpoint` minus the pin
- *      lookup.
+ * `resolveEndpoint(doc, endpoint)` collapses the three-step lookup
+ * triplet (`doc.components.find` → `lookupBySku` → `entry.pin_metadata.find`)
+ * that appeared verbatim across many rule files (M-002 in the
+ * /ce:review pass).
  *
  * Migration policy (resolves M-001 from the v0.1-pipeline-io review):
  *   - Connection-traversal rules use `resolveEndpoint` —
@@ -24,7 +15,11 @@
  *     boilerplate to collapse — `lookupBySku` already IS the helper —
  *     so wrapping it would add lines, not reduce them.
  *
- * Pure functions. No side effects. Registry is passed as a parameter so
+ * Round-2 M2-001: a `resolveComponent` companion was added in round 1
+ * with zero callers (current-budget actually uses `resolveEndpoint`,
+ * no-floating-pins doesn't need it). Removed pending a real consumer.
+ *
+ * Pure function. No side effects. Registry is passed as a parameter so
  * tests can stub a different registry (mirrors the cross-consistency
  * gate's signature). Production callers omit and the canonical registry
  * is used.
@@ -42,14 +37,6 @@ import {
 
 /** A component instance from the runtime document (`{id, sku, quantity}`). */
 export type ComponentInstance = VolteuxProjectDocument["components"][number];
-
-/**
- * Endpoint shape used in connections — `{component_id, pin_label}`. Aliased
- * from `VolteuxPin` (derived from PinSchema in `schemas/document.zod.ts`)
- * so a future schema change to the pin shape automatically widens this
- * helper rather than letting the two definitions silently drift.
- */
-export type Endpoint = VolteuxPin;
 
 /** Registry shape the helper accepts (mirrors `cross-consistency.ts`). */
 export type ComponentRegistry = Readonly<
@@ -82,44 +69,20 @@ export interface ResolvedEndpoint {
  * resolve but the pin label is not declared. Rules can choose to skip
  * (they can't reason about an unknown pin) or to surface the gap; cross-
  * consistency check (c) catches this case independently.
+ *
+ * Endpoint parameter type is `VolteuxPin` (the inferred type of
+ * PinSchema in `schemas/document.zod.ts`). Round-2 R2-K-005 dropped a
+ * local `Endpoint` alias that no rule file imported by name.
  */
 export function resolveEndpoint(
   doc: VolteuxProjectDocument,
-  endpoint: Endpoint,
+  endpoint: VolteuxPin,
   registry: ComponentRegistry = COMPONENTS,
 ): ResolvedEndpoint | null {
-  const resolved = resolveComponent(doc, endpoint.component_id, registry);
-  if (!resolved) return null;
-  const pin = resolved.entry.pin_metadata.find(
-    (p) => p.label === endpoint.pin_label,
-  );
-  return { ...resolved, pin };
-}
-
-/**
- * Resolve a component instance + registry entry by `component_id`.
- * Returns `null` if the component is not in `doc.components` or its SKU
- * is not in the registry — both caught by cross-consistency checks (b)
- * and (g), so a rule that hits `null` is operating on an
- * already-malformed document and should silently skip the iteration.
- *
- * Used by connection-traversal rules that need only {component, entry}
- * without a pin label (e.g., current-budget needs to confirm one side
- * is the MCU before keying off the pin label literally).
- */
-export interface ResolvedComponent {
-  component: ComponentInstance;
-  entry: ComponentRegistryEntry;
-}
-
-export function resolveComponent(
-  doc: VolteuxProjectDocument,
-  componentId: string,
-  registry: ComponentRegistry = COMPONENTS,
-): ResolvedComponent | null {
-  const component = doc.components.find((c) => c.id === componentId);
+  const component = doc.components.find((c) => c.id === endpoint.component_id);
   if (!component) return null;
   const entry = registry[component.sku];
   if (!entry) return null;
-  return { component, entry };
+  const pin = entry.pin_metadata.find((p) => p.label === endpoint.pin_label);
+  return { component, entry, pin };
 }
