@@ -65,9 +65,18 @@
  * namespace-form reset directly per the lazy-init learning's forward-going
  * prescription. Mirrors `infra/server/cache.ts`'s `__testing` shape.
  *
- * **Cost tracking placeholder.** Unit 7's `pipeline/cost.ts` lands the
- * real CostTracker. Unit 6 ships a `NoopCostTracker` so the orchestrator's
- * `cost_usd` field has a contract; Unit 7 swaps the implementation.
+ * **Cost tracking.** Unit 7 ships the real `CostTracker` at
+ * `pipeline/cost.ts` and `defaultPipelineDeps()` swaps from
+ * `NoopCostTracker` to a per-run `() => new CostTracker()` factory.
+ * The `NoopCostTracker` interface + factory remain exported here so
+ * tests can construct `PipelineDeps` inline without accumulating real
+ * per-token cost.
+ *
+ * **Trace writer.** Unit 7 ships the real `defaultTraceWriter()` at
+ * `pipeline/trace.ts` and `defaultPipelineDeps()` swaps from
+ * `NoopTraceWriter` to it. The `NoopTraceWriter` (still exported from
+ * `pipeline/trace.ts`) is the test default — tests that don't want
+ * disk I/O construct `PipelineDeps` inline with it.
  *
  * **Logger discipline.** Do not log the API key, request bodies, or
  * `process.env`. The Anthropic SDK's request logger is OFF by default —
@@ -106,10 +115,11 @@ import {
 } from "./gates/compile.ts";
 import { formatHonestGap } from "./honest-gap.ts";
 import {
-  NoopTraceWriter,
+  defaultTraceWriter,
   type TraceEvent,
   type TraceWriter,
 } from "./trace.ts";
+import { CostTracker } from "./cost.ts";
 import type {
   VolteuxHonestGap,
   VolteuxProjectDocument,
@@ -410,8 +420,19 @@ export function defaultPipelineDeps(): Promise<PipelineDeps> {
       runRules: defaultRunRules,
       runCompileGate: defaultRunCompileGate,
       repair: defaultRepair,
-      traceWriter: NoopTraceWriter,
-      costTrackerFactory: NoopCostTracker,
+      // Unit 7: real JSON-Lines writer at traces/<run-id>.jsonl. The
+      // writer is best-effort: file-write failures log a stderr WARN
+      // and never propagate. Tests that don't want file I/O construct
+      // PipelineDeps inline with `traceWriter: NoopTraceWriter`
+      // (still exported above) — defaultPipelineDeps() is for
+      // production callers only.
+      traceWriter: defaultTraceWriter(),
+      // Unit 7: real CostTracker accumulating spend in integer
+      // microcents using committed Anthropic per-model rates. Per-run
+      // factory, NEVER shared across runs (concurrent runs would race
+      // on the accumulator). Tests use `costTrackerFactory: NoopCostTracker`
+      // when constructing PipelineDeps inline.
+      costTrackerFactory: () => new CostTracker(),
       generateRunId,
     };
   })();
