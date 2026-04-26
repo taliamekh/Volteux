@@ -1,3 +1,7 @@
+// KAI-DONE (Unit 1): Pin geometry adapter for 4 boards (Uno, Pi Pico,
+// ESP32-WROOM, ESP32-C3). Cross-validates Uno against components/registry.ts
+// pin_metadata[].anchor — registry stays authoritative per CLAUDE.md schema discipline.
+
 /**
  * Shared board geometry data — single source of truth for pin positions
  * across the 4 boards Volteux supports for the v1.5 UI deep pass.

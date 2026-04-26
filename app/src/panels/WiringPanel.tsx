@@ -1,3 +1,8 @@
+// KAI-DONE (Units 3, 4, 5b, 8): Manhattan wire routing (route-wire.ts) replaces
+// Bezier; bus-offset for parallel wires; per-component drag with snap-to-hole;
+// expanded view renders WiringSpecTable; selectable wires animate stroke-dashoffset
+// reveal; legend uses JetBrains Mono.
+
 import {
   useEffect,
   useRef,

@@ -1,3 +1,6 @@
+// KAI-DONE (Units 6, 7, 8): Uno sub-mesh (USB-B, DC barrel, ICSP, reset, LED);
+// pin markers from board-data.ts; draggable HC-SR04/SG90 with snap-to-grid;
+// 3D wires via Wire3D + CatmullRomCurve3; camera dolly via @react-spring/three.
 // ============================================================
 // Volteux — Hero 3D scene (R3F)
 // ============================================================
