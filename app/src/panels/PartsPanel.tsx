@@ -1,3 +1,4 @@
+import { cartUrl } from "../lib/adafruitCart";
 import type { Project } from "../types";
 import PartIcon from "./PartIcon";
 
@@ -64,7 +65,15 @@ export default function PartsPanel({ project, owned, setOwned }: PartsPanelProps
             </>
           )}
         </div>
-        <button className="btn-cart" disabled={allOwned} style={{ backgroundColor: "rgb(250, 250, 250)" }}>
+        <button
+          className="btn-cart"
+          disabled={allOwned || !project.document}
+          onClick={() => {
+            if (!project.document) return;
+            window.open(cartUrl(project.document), "_blank", "noopener,noreferrer");
+          }}
+          style={{ backgroundColor: "rgb(250, 250, 250)" }}
+        >
           {allOwned ? "Ready to build ✓" : "Buy on Adafruit →"}
         </button>
       </div>

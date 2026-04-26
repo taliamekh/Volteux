@@ -7,6 +7,8 @@
 // will be replaced by — or derived from — `schemas/document.zod.ts`.
 // Until then this is the contract the UI components rely on.
 
+import type { VolteuxProjectDocument } from "../../schemas/document.zod";
+
 export type IconKind =
   | "board"
   | "sonar"
@@ -81,6 +83,15 @@ export interface Project {
    * U1-window fallback until U4 lands.
    */
   sketchSource: string;
+  /**
+   * Raw schema-validated source document. Available when the project came
+   * from a fixture or pipeline output (always today; null only in tests).
+   * Carries data the view-model intentionally drops (breadboard_layout,
+   * raw connections, archetype metadata) so panels and side-effects (URL
+   * hash persistence, Adafruit cart URL) can read directly from the
+   * canonical schema instead of reaching back to the fixture.
+   */
+  document?: VolteuxProjectDocument;
   refineSuggestions: string[];
 }
 

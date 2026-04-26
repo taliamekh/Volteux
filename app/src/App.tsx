@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import FlashModal from "./components/FlashModal";
 import Header from "./components/Header";
 import SignInModal from "./components/SignInModal";
 import TweaksPanel from "./components/TweaksPanel";
@@ -8,6 +9,7 @@ import ResultView from "./views/ResultView";
 import { applyRefinement, summarizeChange } from "./data/projects";
 import { pipelineToProject } from "./data/adapter";
 import { loadDefaultFixture } from "./data/fixtures";
+import { decode, encode } from "./lib/urlHash";
 import type { Project, Tweaks, User, ViewName } from "./types";
 
 const TWEAK_DEFAULTS: Tweaks = {
@@ -37,14 +39,65 @@ export default function App() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [tweaksOpen, setTweaksOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [flashing, setFlashing] = useState(false);
   const [user, setUser] = useState<User | null>(loadUser);
   const [tweaks, setTweaks] = useState<Tweaks>(TWEAK_DEFAULTS);
+
+  // Loop-prevention guard for the URL-hash effects (U8). When the mount-time
+  // restore effect successfully decodes a document and calls setProject, the
+  // resulting project-change would otherwise re-write the hash we just read
+  // from. We flip this ref to `true` right before the restore's setProject so
+  // the next write-effect run skips exactly that one write. Default `false`
+  // keeps the hash-write working for the regular "build from scratch" path.
+  const restoredFromHashRef = useRef<boolean>(false);
 
   // Persist user to localStorage
   useEffect(() => {
     if (user) localStorage.setItem("volteux_user", JSON.stringify(user));
     else localStorage.removeItem("volteux_user");
   }, [user]);
+
+  // Restore project from URL hash on mount. If decode fails (empty hash,
+  // gibberish, schema-invalid payload), fall through to landing — no toast,
+  // no console error spam. Per CLAUDE.md "no silent failures", decode itself
+  // surfaces failure as `null`; the caller (this effect) decides UX.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const hash = window.location.hash;
+      if (!hash) return;
+      const doc = await decode(hash);
+      if (cancelled || !doc) return;
+      const restored = pipelineToProject(doc);
+      restoredFromHashRef.current = true;
+      setProject(restored);
+      setView("result");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Write the document to the URL hash whenever the project changes. Skip
+  // exactly one write (the post-restore one) to avoid a mount→write→mount
+  // loop. history.replaceState avoids polluting browser history on every
+  // chat-refine.
+  useEffect(() => {
+    if (!project?.document) return;
+    if (restoredFromHashRef.current) {
+      restoredFromHashRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const hash = await encode(project.document!);
+      if (cancelled) return;
+      window.history.replaceState(null, "", `#${hash}`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.document]);
 
   // Apply palette + density + type by toggling classes on <body>.
   useEffect(() => {
@@ -158,10 +211,7 @@ export default function App() {
             project={project}
             onRefine={refine}
             refining={refining}
-            onFlash={() => {
-              setRefineToast("Flashing to your Uno… (demo)");
-              window.setTimeout(() => setRefineToast(null), 2400);
-            }}
+            onFlash={() => setFlashing(true)}
             refineToast={refineToast}
           />
         </div>
@@ -183,6 +233,12 @@ export default function App() {
           }}
         />
       )}
+
+      <FlashModal
+        open={flashing}
+        onClose={() => setFlashing(false)}
+        project={project}
+      />
     </div>
   );
 }

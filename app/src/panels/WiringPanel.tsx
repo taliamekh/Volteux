@@ -15,17 +15,17 @@ import {
   type Hole,
 } from "./breadboard-geometry";
 import fixtureJson from "../../../fixtures/uno-ultrasonic-servo.json";
-import { VolteuxProjectDocumentSchema } from "../../../schemas/document.zod";
+import {
+  VolteuxProjectDocumentSchema,
+  type VolteuxProjectDocument,
+} from "../../../schemas/document.zod";
 
-// ---------------------------------------------------------------
-// v0 plumbing shim: load the document directly from the fixture so
-// this panel can read raw `breadboard_layout` + `connections` (the
-// adapter at `app/src/data/adapter.ts` deliberately doesn't carry
-// these forward — they're rendering concerns, not view-model state).
-// U8 will pass `document` via props; once that lands this import is
-// deleted and the panel reads from `props.project.document`.
-// ---------------------------------------------------------------
-const fixtureDoc = VolteuxProjectDocumentSchema.parse(fixtureJson);
+// Fallback document for the brief render window before `project.document`
+// is populated by the adapter (and for any test that constructs a Project
+// without a document). U8 made `project.document` available; we prefer it
+// when present and fall back to the fixture so the panel never crashes.
+const fixtureDoc: VolteuxProjectDocument =
+  VolteuxProjectDocumentSchema.parse(fixtureJson);
 
 interface WiringPanelProps {
   project: Project;
@@ -117,10 +117,10 @@ function componentLabelFill(): string {
  * not the Uno, which is rendered as an off-board stub). Returns a map
  * keyed by component_id for fast wire-endpoint lookup.
  */
-function placeOnBoard(): Map<string, PlacedComponent> {
+function placeOnBoard(doc: VolteuxProjectDocument): Map<string, PlacedComponent> {
   const placed = new Map<string, PlacedComponent>();
-  for (const layoutEntry of fixtureDoc.breadboard_layout.components) {
-    const compRef = fixtureDoc.components.find(
+  for (const layoutEntry of doc.breadboard_layout.components) {
+    const compRef = doc.components.find(
       (c) => c.id === layoutEntry.component_id,
     );
     if (!compRef) continue;
@@ -196,11 +196,12 @@ function unoPinY(pinLabel: string): number {
  * polyline and warns.
  */
 function endpointXY(
+  doc: VolteuxProjectDocument,
   componentId: string,
   pinLabel: string,
   placed: Map<string, PlacedComponent>,
 ): { x: number; y: number } | null {
-  const compRef = fixtureDoc.components.find((c) => c.id === componentId);
+  const compRef = doc.components.find((c) => c.id === componentId);
   if (!compRef) return null;
   const entry = lookupBySku(compRef.sku);
   if (!entry) return null;
@@ -233,7 +234,8 @@ function curvedPath(
 }
 
 export default function WiringPanel({ project, expanded, onExpandToggle }: WiringPanelProps) {
-  const placed = placeOnBoard();
+  const doc = project.document ?? fixtureDoc;
+  const placed = placeOnBoard(doc);
 
   return (
     <div className={`panel flex-grow wire-panel ${expanded ? "panel-expanded" : ""}`}>
@@ -392,9 +394,9 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
 
           {/* Wires */}
           <g fill="none" strokeWidth="1.4" strokeLinecap="round">
-            {fixtureDoc.connections.map((conn, i) => {
-              const a = endpointXY(conn.from.component_id, conn.from.pin_label, placed);
-              const b = endpointXY(conn.to.component_id, conn.to.pin_label, placed);
+            {doc.connections.map((conn, i) => {
+              const a = endpointXY(doc, conn.from.component_id, conn.from.pin_label, placed);
+              const b = endpointXY(doc, conn.to.component_id, conn.to.pin_label, placed);
               if (!a || !b) {
                 console.warn(
                   `Wiring: skipping connection — unknown component '${

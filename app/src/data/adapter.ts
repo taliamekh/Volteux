@@ -291,6 +291,7 @@ export function pipelineToProject(doc: VolteuxProjectDocument): Project {
     wiring,
     code,
     sketchSource: doc.sketch.main_ino,
+    document: doc,
     refineSuggestions: [
       "make it wave 3 times",
       "trigger only when really close",

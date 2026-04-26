@@ -2022,3 +2022,82 @@ input:focus-visible,
   .col-resizer { display: none; }
   .panel.panel-expanded { inset: 12px; }
 }
+
+/* ============================================================
+   FLASH MODAL — multi-step fake flash overlay (U6)
+   ============================================================ */
+.flash-modal { padding: 32px 32px 28px; }
+
+.flash-stepper {
+  display: flex; flex-direction: column;
+  gap: 12px;
+  margin: 24px 0 8px;
+}
+.flash-step {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink-3);
+  transition: all .25s;
+}
+.flash-step.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+.flash-step.complete {
+  border-color: color-mix(in oklab, var(--success) 35%, transparent);
+  color: var(--ink-2);
+}
+.flash-step-icon {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+.flash-step.complete .flash-step-icon {
+  background: var(--success);
+  color: var(--bg);
+}
+.flash-step.active .flash-step-icon {
+  background: var(--accent);
+  color: var(--bg);
+  animation: flash-pulse 1.2s ease-in-out infinite;
+}
+@keyframes flash-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); }
+  50%      { box-shadow: 0 0 0 6px transparent; }
+}
+.flash-step-label { font-size: 13px; flex: 1; }
+
+.flash-success {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 16px;
+  padding: 16px 0 4px;
+  text-align: center;
+}
+.flash-success-mark {
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--success) 18%, transparent);
+  color: var(--success);
+  display: flex; align-items: center; justify-content: center;
+  animation: flash-success-in .3s ease-out;
+}
+@keyframes flash-success-in {
+  from { transform: scale(0.8); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+.flash-success p {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+  max-width: 320px;
+  margin: 0;
+}
+.flash-success .auth-submit { min-width: 120px; }
+
