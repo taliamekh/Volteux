@@ -57,6 +57,23 @@ export default function App() {
   // refine #2. Mirrors the SignInModal pattern (auth-timer ref + cleanup).
   const refineToastTimerRef = useRef<number | null>(null);
 
+  // Cancel-flag for an in-flight refine(). resetToLanding flips this true
+  // so a refine that was awaiting its 900ms artificial delay (or the
+  // optional AI summarization) doesn't resurrect the dead project after
+  // the user navigated away. Without this, refine's stale closure-captured
+  // `project` would call setProject(next) post-navigation, bringing the
+  // old project back to life on landing.
+  const refineCancelRef = useRef<boolean>(false);
+
+  // Generation counter for in-flight URL-hash decodes. Each restoreFromHash
+  // call captures its own generation at start; if a newer decode bumps the
+  // counter while the older one is still awaiting, the older one bails
+  // before mutating state. Without this, 3 back-button clicks in 100ms
+  // produce 3 concurrent decodes whose resolution order is not guaranteed
+  // — older decodes resolving last would leave state pointing at the
+  // wrong project relative to the URL.
+  const decodeGenerationRef = useRef<number>(0);
+
   // Cleanup on unmount: a sudden unmount mid-toast would otherwise leak the
   // pending setRefineToast(null) call into the next mount's React tree.
   useEffect(() => {
@@ -75,15 +92,20 @@ export default function App() {
   }, [user]);
 
   // Reset-to-landing: shared by the user-triggered logo/new-project click
-  // path (goLanding) and the new hashchange empty-hash branch. The clearHash
+  // path (goLanding) and the hashchange empty-hash branch. The clearHash
   // flag distinguishes the two: user-click owns the navigation and must
   // clear the URL hash; the hashchange path is reacting to the browser
-  // already changing the hash, so it must NOT write back. Both paths flip
-  // the loop guard so the project-change write effect skips the implicit
-  // null setProject — defensive: today the write effect early-returns on
-  // null project.document, but a future refactor of that effect should not
-  // be a re-entrancy bug here.
+  // already changing the hash, so it must NOT write back.
+  //
+  // We deliberately do NOT flip restoredFromHashRef here. The previous
+  // design did, but the project-write effect early-returns on
+  // !project?.document, which means the flip never gets consumed when
+  // we're going to a null project — it leaks into the next legitimate
+  // setProject(non-null) call (e.g., "See an example") and silently
+  // skips the hash write. We also mark any in-flight refine as cancelled
+  // so it doesn't resurrect the dead project after the await.
   const resetToLanding = (opts: { clearHash: boolean }) => {
+    refineCancelRef.current = true;
     setView("landing");
     setPrompt("");
     setProject(null);
@@ -94,17 +116,22 @@ export default function App() {
         window.location.pathname + window.location.search,
       );
     }
-    restoredFromHashRef.current = true;
   };
 
   // Decode + apply a hash, shared by mount-restore and hashchange. Returns
-  // true if a project was restored, false otherwise (empty / invalid hash).
-  // Flips the loop guard before setProject so the write effect skips. Per
-  // CLAUDE.md "no silent failures", decode() surfaces failure as null; this
-  // helper passes that null through and the caller decides UX (mount stays
-  // on landing, hashchange preserves current state).
+  // true if a project was restored, false otherwise (empty / invalid hash,
+  // or a newer decode superseded this one). Flips the loop guard before
+  // setProject so the write effect skips. Per CLAUDE.md "no silent
+  // failures", decode() surfaces failure as null; this helper passes that
+  // null through and the caller decides UX (mount stays on landing,
+  // hashchange preserves current state).
   const restoreFromHash = async (hash: string): Promise<boolean> => {
+    const myGeneration = ++decodeGenerationRef.current;
     const doc = await decode(hash);
+    // Bail if a newer hashchange / restore started while we were awaiting.
+    // Without this, out-of-order decode resolutions could land at a stale
+    // project relative to the URL.
+    if (myGeneration !== decodeGenerationRef.current) return false;
     if (!doc) return false;
     const restored = pipelineToProject(doc);
     restoredFromHashRef.current = true;
@@ -216,9 +243,16 @@ export default function App() {
 
   const refine = async (refinement: string) => {
     if (refining || !project) return;
+    refineCancelRef.current = false;
     setRefining(true);
     setRefineToast(null);
     await new Promise((r) => window.setTimeout(r, 900));
+    // resetToLanding() flipped the cancel flag while we were awaiting →
+    // the user navigated away. Don't resurrect the dead project.
+    if (refineCancelRef.current) {
+      setRefining(false);
+      return;
+    }
     const { project: next, changed } = applyRefinement(project, refinement);
     setProject(next);
     setRefining(false);
@@ -226,6 +260,8 @@ export default function App() {
     let msg = changed ? `Updated: ${refinement}` : "Got it — no changes needed";
     if (tweaks.useAi) {
       const aiMsg = await summarizeChange(refinement, next);
+      // Same cancel check after the optional AI await.
+      if (refineCancelRef.current) return;
       if (aiMsg) msg = aiMsg;
     }
     setRefineToast(msg);
