@@ -59,15 +59,13 @@ export function applyRefinement(
     const nextSketch = p.sketchSource.replace(waveBlock, wrapBlock);
     if (nextSketch !== p.sketchSource) {
       p.sketchSource = nextSketch;
-      if (p.document) {
-        p.document = {
-          ...p.document,
-          sketch: {
-            ...p.document.sketch,
-            main_ino: nextSketch,
-          },
-        };
-      }
+      p.document = {
+        ...p.document,
+        sketch: {
+          ...p.document.sketch,
+          main_ino: nextSketch,
+        },
+      };
       changed = true;
     }
   }
@@ -90,15 +88,13 @@ export function applyRefinement(
         : line,
     );
     p.sketchSource = p.sketchSource.replace(/distance < 25/g, "distance < 10");
-    if (p.document) {
-      p.document = {
-        ...p.document,
-        sketch: {
-          ...p.document.sketch,
-          main_ino: p.document.sketch.main_ino.replace(/distance < 25/g, "distance < 10"),
-        },
-      };
-    }
+    p.document = {
+      ...p.document,
+      sketch: {
+        ...p.document.sketch,
+        main_ino: p.document.sketch.main_ino.replace(/distance < 25/g, "distance < 10"),
+      },
+    };
     changed = true;
   }
 
@@ -122,24 +118,22 @@ export function applyRefinement(
       pos: { x: 30, y: 70 },
     });
     p.wiring.push({ from: "Buzzer+", to: "D5", color: "purple", pin: "D5" });
-    if (p.document) {
-      p.document = {
-        ...p.document,
-        components: [
-          ...p.document.components,
-          { id: "bz1", sku: "1536", quantity: 1 },
-        ],
-        connections: [
-          ...p.document.connections,
-          {
-            from: { component_id: "bz1", pin_label: "+" },
-            to: { component_id: "u1", pin_label: "D5" },
-            wire_color: "yellow",
-            purpose: "Buzzer signal pin",
-          },
-        ],
-      };
-    }
+    p.document = {
+      ...p.document,
+      components: [
+        ...p.document.components,
+        { id: "bz1", sku: "1536", quantity: 1 },
+      ],
+      connections: [
+        ...p.document.connections,
+        {
+          from: { component_id: "bz1", pin_label: "+" },
+          to: { component_id: "u1", pin_label: "D5" },
+          wire_color: "yellow",
+          purpose: "Buzzer signal pin",
+        },
+      ],
+    };
     changed = true;
   }
 
