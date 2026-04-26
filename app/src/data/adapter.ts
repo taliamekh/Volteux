@@ -16,7 +16,15 @@ import {
   lookupBySku,
   type ComponentRegistryEntry,
 } from "../../../components/registry";
-import type { VolteuxProjectDocument } from "../../../schemas/document.zod";
+import type {
+  VolteuxConnection,
+  VolteuxProjectDocument,
+} from "../../../schemas/document.zod";
+
+// The schema's wire_color enum, narrowed for the adapter's exhaustive switch.
+// Pulled from the Zod-derived type so a schema-side enum addition forces a
+// compile-time fail at the never-check below until we update the mapping.
+type SchemaWireColor = NonNullable<VolteuxConnection["wire_color"]>;
 import type {
   CodeLine,
   CodeSegment,
@@ -88,7 +96,8 @@ function iconForEntry(entry: ComponentRegistryEntry): IconKind {
  * "purple" is UI-only (the chat's "add a beep" path adds it) and never
  * appears in the schema, so it's not produced here.
  */
-function mapWireColor(color: string | undefined): WireColor {
+function mapWireColor(color: SchemaWireColor | undefined): WireColor {
+  if (color === undefined) return "blue"; // safe fallback for missing color
   switch (color) {
     case "red":
       return "red";
@@ -104,8 +113,14 @@ function mapWireColor(color: string | undefined): WireColor {
       return "yellow"; // closest UI palette match
     case "white":
       return "blue";   // closest UI palette match
-    default:
-      return "blue";   // safe fallback for missing color
+    default: {
+      // Exhaustiveness guard: if a future schema adds a new wire_color enum
+      // value, this assignment fails at compile time until the new branch
+      // is added above. Replaces the old "string | undefined → blue"
+      // catch-all that silently masked schema drift.
+      const _exhaustive: never = color;
+      return _exhaustive;
+    }
   }
 }
 
