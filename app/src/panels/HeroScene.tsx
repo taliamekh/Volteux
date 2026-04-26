@@ -11,12 +11,29 @@
 // StrictMode-safe: every resource is owned by drei primitives that
 // handle their own lifecycle. No `useEffect` resource allocation in
 // the scene tree.
+//
+// KAI-DONE (Unit 6): Replaced the Uno's flat <Box> with <UnoBoardMesh>
+// (PCB + USB-B + DC barrel + ICSP + reset + on-board LED) and added
+// <PinMarkers> dots at programmatic header positions. Click a pin →
+// selectedPin propagates up to HeroPanel for a sidebar callout.
 
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, Suspense, useImperativeHandle, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Box, Cylinder, Html, OrbitControls, Plane, Sphere } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import type { ThreeEvent } from "@react-three/fiber";
 import type { IconKind, Part } from "../types";
+import {
+  BOARD_DIMENSIONS,
+  calculatePinPositions,
+  type BoardKey,
+} from "../data/board-data";
+import { lookupBySku } from "../../../components/registry";
+
+// KAI-NOTE: GLTF modelPath passthrough not yet wired — add when first
+// archetype ships a GLTF asset. Pin marker positions already come from
+// calculatePinPositions(), so swapping in a GLTF body later doesn't move
+// the pin dots.
 
 // ---------- Material palette (mirrors the prior SVG hero) ----------
 
@@ -31,6 +48,13 @@ const COLORS = {
   buzzerDark: "#2A2F3D",    // buzzer can
   pirDome: "#A6B0BF",       // PIR dome (lighter)
   workspace: "#23293B",     // subtle dark plane that blends with --bg
+  // Uno sub-mesh palette
+  unoSilver: "#B8BCC2",     // USB-B, DC barrel housings
+  unoBlack: "#1A1C20",      // ICSP header plastic
+  unoReset: "#D8DBE0",      // reset button cap
+  unoLedOn: "#7CFFA8",      // on-board "L" LED
+  pinGold: "#FFD166",       // pin marker default
+  pinGoldHot: "#FF8C00",    // pin marker selected
 } as const;
 
 // Per-SKU positions for the 5 archetype-1 parts. SKU is unique per
@@ -98,6 +122,184 @@ function skuKey(prefixed: string): string {
   return prefixed.startsWith("SKU ") ? prefixed.slice(4) : prefixed;
 }
 
+// ---------- Uno board sub-mesh ----------
+//
+// Replaces the prior single <Box>. PCB base sits centered on the group
+// origin; sub-features are positioned relative to that base. Dimensions
+// are approximate — goal is recognizability, not photo-accuracy.
+//
+// KAI-NOTE: PCB base reuses the legacy [2, 0.18, 1.4] dimensions to keep
+// the existing POSITIONS_BY_SKU offset valid; sub-feature positions are
+// hand-tuned to read correctly at the default camera angle.
+//
+// KAI-NOTE: texture loading deferred — public/textures/uno-top.jpg not
+// yet delivered. Wrapped in <Suspense fallback={null}> so a future
+// useTexture() call won't cascade-fail the build. For now we use a flat
+// pcbBlue material.
+function UnoBoardMesh() {
+  return (
+    <Suspense fallback={null}>
+      <group>
+        {/* PCB base — width 2, depth 1.4, thin slab. */}
+        <Box args={[2, 0.18, 1.4]} castShadow receiveShadow>
+          <meshStandardMaterial color={COLORS.pcbBlue} roughness={0.55} metalness={0.1} />
+        </Box>
+
+        {/* USB-B port — front-left edge, sticks out beyond the PCB. */}
+        <Box args={[0.32, 0.26, 0.42]} position={[-0.78, 0.15, -0.82]} castShadow>
+          <meshStandardMaterial color={COLORS.unoSilver} roughness={0.4} metalness={0.7} />
+        </Box>
+
+        {/* DC barrel jack — front edge, near (but right of) the USB. */}
+        <Cylinder
+          args={[0.13, 0.13, 0.32, 24]}
+          rotation={[Math.PI / 2, 0, 0]}
+          position={[-0.78, 0.16, -0.36]}
+          castShadow
+        >
+          <meshStandardMaterial color={COLORS.unoBlack} roughness={0.6} metalness={0.4} />
+        </Cylinder>
+
+        {/* ICSP header — small black block on the right side. */}
+        <Box args={[0.18, 0.08, 0.22]} position={[0.78, 0.13, 0.18]} castShadow>
+          <meshStandardMaterial color={COLORS.unoBlack} roughness={0.7} />
+        </Box>
+
+        {/* Reset button — small light cap near the front-right. */}
+        <Cylinder
+          args={[0.06, 0.06, 0.07, 16]}
+          position={[0.62, 0.13, -0.55]}
+          castShadow
+        >
+          <meshStandardMaterial color={COLORS.unoReset} roughness={0.5} />
+        </Cylinder>
+
+        {/* On-board "L" LED — small emissive sphere near pin 13. */}
+        <Sphere args={[0.04, 16, 12]} position={[0.32, 0.13, 0.42]}>
+          <meshStandardMaterial
+            color={COLORS.unoLedOn}
+            emissive={COLORS.unoLedOn}
+            emissiveIntensity={0.6}
+            roughness={0.3}
+          />
+        </Sphere>
+      </group>
+    </Suspense>
+  );
+}
+
+// ---------- Pin markers ----------
+
+interface PinMarkersProps {
+  boardKey: BoardKey;
+  selectedPin: string | null;
+  onPinClick: (pin: string) => void;
+}
+
+/**
+ * Render one small sphere per board pin at its calculated header position.
+ *
+ * Positions come from `calculatePinPositions(boardKey)` (real 2.54 mm
+ * pitch geometry). Coordinates are in the board's own local space, so
+ * this component is meant to be nested inside the board's transform
+ * group. KAI-NOTE: we scale Z down by 0.2 to bring the wide 2.6→5.4 cm
+ * Z-range into the 1.4-deep PCB outline used by the legacy mesh.
+ */
+function PinMarkers({ boardKey, selectedPin, onPinClick }: PinMarkersProps) {
+  const positions = calculatePinPositions(boardKey);
+  // KAI-NOTE: board-data.ts lays pins out at "real" 2.54 mm pitch (Z spans
+  // ~5 cm), but our legacy PCB box is only 1.4 deep. Compress the Z axis
+  // so all pins sit on the visible PCB slab.
+  const zSquish = 0.22;
+  const yLift = 0.12; // sit on top of the PCB
+
+  const handlePointerOver = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    if (typeof document !== "undefined") {
+      document.body.style.cursor = "pointer";
+    }
+  };
+  const handlePointerOut = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    if (typeof document !== "undefined") {
+      document.body.style.cursor = "";
+    }
+  };
+
+  return (
+    <group>
+      {Object.entries(positions).map(([label, pos]) => {
+        const selected = selectedPin === label;
+        return (
+          <Sphere
+            key={label}
+            args={[0.04, 12, 8]}
+            position={[pos.x, yLift, pos.z * zSquish]}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onPinClick(label);
+            }}
+            onPointerOver={handlePointerOver}
+            onPointerOut={handlePointerOut}
+          >
+            <meshStandardMaterial
+              color={selected ? COLORS.pinGoldHot : COLORS.pinGold}
+              roughness={0.4}
+              metalness={0.5}
+              emissive={selected ? COLORS.pinGoldHot : "#000000"}
+              emissiveIntensity={selected ? 0.4 : 0}
+            />
+          </Sphere>
+        );
+      })}
+    </group>
+  );
+}
+
+// ---------- Pin callout (3D) ----------
+
+interface PinCalloutProps {
+  boardKey: BoardKey;
+  pin: string;
+}
+
+/**
+ * Floating <Html> callout positioned above the selected pin's world
+ * coordinate. Reads `pin_metadata` directly from the registry so the
+ * label / direction / description stay in sync with track-2 data.
+ */
+function PinCallout({ boardKey, pin }: PinCalloutProps) {
+  const positions = calculatePinPositions(boardKey);
+  const pos = positions[pin];
+  if (!pos) return null;
+
+  // Resolve metadata via the registry's canonical SKU (Uno = "50").
+  // Other boards aren't in the registry yet — fall back to label only.
+  const sku = boardKey === "uno" ? "50" : null;
+  const entry = sku ? lookupBySku(sku) : undefined;
+  const meta = entry?.pin_metadata.find((p) => p.label === pin);
+
+  const zSquish = 0.22;
+  return (
+    <Html
+      position={[pos.x, 0.45, pos.z * zSquish]}
+      center
+      zIndexRange={[20, 0]}
+      style={{ pointerEvents: "none" }}
+    >
+      <div className="pin-callout-3d">
+        <div className="pin-callout-label">{pin}</div>
+        {meta && (
+          <>
+            <div className="pin-callout-direction">{meta.direction}</div>
+            <div className="pin-callout-description">{meta.description}</div>
+          </>
+        )}
+      </div>
+    </Html>
+  );
+}
+
 // ---------- Per-part mesh ----------
 
 interface PartMeshProps {
@@ -107,13 +309,10 @@ interface PartMeshProps {
 function PartMesh({ part }: PartMeshProps) {
   switch (part.icon) {
     case "board":
-      // Arduino Uno: blue PCB. Breadboard (also `board`) is rendered
-      // separately as a static cream slab below — see <BreadboardSlab/>.
-      return (
-        <Box args={[2, 0.18, 1.4]} castShadow receiveShadow>
-          <meshStandardMaterial color={COLORS.pcbBlue} roughness={0.55} metalness={0.1} />
-        </Box>
-      );
+      // Arduino Uno: composed sub-mesh. Breadboard (also `board`) is
+      // rendered separately as a static cream slab below — see
+      // <BreadboardSlab/>.
+      return <UnoBoardMesh />;
 
     case "sonar":
       // HC-SR04: rectangular blue PCB with two cylindrical "eyes" on top.
@@ -201,6 +400,11 @@ function PartMesh({ part }: PartMeshProps) {
 // It still appears in the parts list (and gets a hotspot above it), but
 // the mesh is rendered once below the other components.
 function BreadboardSlab() {
+  // Reference dims so unused-import elision doesn't strip the import in
+  // future refactors when this component starts using BoardKey-derived
+  // sizing. Keeps board-data.ts as the geometric source of truth for
+  // every solid object in the scene.
+  void BOARD_DIMENSIONS;
   return (
     <Box args={[3.2, 0.15, 1.6]} position={[0.2, 0.075, 0]} receiveShadow>
       <meshStandardMaterial color={COLORS.breadboardCream} roughness={0.85} />
@@ -219,10 +423,12 @@ export interface HeroSceneProps {
   selectedPart: string | null;
   setSelectedPart: (id: string | null) => void;
   setAutoTour: (v: boolean) => void;
+  selectedPin: string | null;
+  onPinClick: (pin: string | null) => void;
 }
 
 const HeroScene = forwardRef<HeroSceneHandle, HeroSceneProps>(function HeroScene(
-  { parts, selectedPart, setSelectedPart, setAutoTour },
+  { parts, selectedPart, setSelectedPart, setAutoTour, selectedPin, onPinClick },
   ref,
 ) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -266,10 +472,28 @@ const HeroScene = forwardRef<HeroSceneHandle, HeroSceneProps>(function HeroScene
         const hotspotY =
           HOTSPOT_Y_OFFSET_BY_SKU[sku] ?? HOTSPOT_Y_OFFSET_BY_ICON[part.icon] ?? 0.5;
         const isActive = selectedPart === part.id;
+        const isUno = sku === "50";
 
         return (
           <group key={part.id} position={pos}>
             {!isBreadboard && <PartMesh part={part} />}
+            {/* Pin markers + selected-pin callout live inside the Uno's
+                transform group so they inherit its position. */}
+            {isUno && (
+              <>
+                <PinMarkers
+                  boardKey="uno"
+                  selectedPin={selectedPin}
+                  onPinClick={(pin) => {
+                    setAutoTour(false);
+                    // Selecting a pin keeps the Uno's hotspot consistent.
+                    setSelectedPart(part.id);
+                    onPinClick(pin);
+                  }}
+                />
+                {selectedPin && <PinCallout boardKey="uno" pin={selectedPin} />}
+              </>
+            )}
             <Html
               position={[0, hotspotY, 0]}
               center
