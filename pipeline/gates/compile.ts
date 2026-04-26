@@ -9,12 +9,19 @@
  *   timeout       — request aborted before response (AbortController fired)
  *   auth          — server returned 401 (bad/missing secret)
  *   bad-request   — server's zValidator rejected the request body (400)
- *   rate-limited  — server returned 429
+ *   rate-limit    — server returned 429
  *   compile-error — 200 with `{ok: false, stderr}` from arduino-cli
  *
- * `transport`/`timeout`/`auth`/`rate-limited` are infra failures Unit 9
+ * `transport`/`timeout`/`auth`/`rate-limit` are infra failures Unit 9
  * surfaces without retry. `compile-error` and `bad-request` are worth
  * one repair turn through `generate()`.
+ *
+ * Wire contract (server response) uses the SAME hyphenated codes as the
+ * TS `kind` literals. The custom `zValidator` hook on the server side
+ * normalizes Zod's default 400 envelope so every server response uses the
+ * same `{ok: false, error, ...}` shape with `error` matching one of the
+ * `CompileGateFailureKind` literals (minus `transport`/`timeout`, which
+ * are client-side conditions).
  *
  * This gate trusts its caller (cross-consistency gate) to have already
  * run `validateAdditionalFileName` against any `additional_files` keys.
@@ -23,7 +30,8 @@
  * skipped pre-validation.
  */
 
-import type { GateResult, Severity } from "../types.ts";
+import { z } from "zod";
+import type { Severity } from "../types.ts";
 
 const DEFAULT_BASE_URL = process.env.COMPILE_API_URL ?? "http://localhost:8787";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -46,8 +54,45 @@ export type CompileGateFailureKind =
   | "timeout"
   | "auth"
   | "bad-request"
-  | "rate-limited"
+  | "rate-limit"
   | "compile-error";
+
+/**
+ * Server response shapes — Zod schemas, not raw `as` casts. Per CLAUDE.md
+ * "Zod is law at every external boundary," HTTP response JSON is a
+ * boundary. Each branch is liberal (`.passthrough()`) so a future server
+ * adding fields doesn't break the gate, but every field the gate keys on
+ * is structurally validated.
+ */
+const SuccessResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    artifact_b64: z.string(),
+    artifact_kind: z.string().optional(),
+    stderr: z.string().optional(),
+    cache_hit: z.boolean().optional(),
+  })
+  .passthrough();
+
+const ErrorResponseSchema = z
+  .object({
+    ok: z.literal(false),
+    error: z.string().optional(),
+    message: z.string().optional(),
+    reason: z.string().optional(),
+    filename: z.string().optional(),
+    /** Present only on `bad-request` 400 from zValidator hook. */
+    issues: z.array(z.unknown()).optional(),
+    stderr: z.string().optional(),
+  })
+  .passthrough();
+
+const ResponseEnvelopeSchema = z.union([
+  SuccessResponseSchema,
+  ErrorResponseSchema,
+]);
+
+type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 
 /**
  * Discriminated failure union — extends `GateResult` with a `kind` field.
@@ -148,21 +193,20 @@ export async function runCompileGate(
     return {
       ok: false,
       severity: "red",
-      kind: "rate-limited",
+      kind: "rate-limit",
       message: "compile-api rate-limited (429)",
       errors: [],
     };
   }
   if (response.status === 400) {
-    const body = (await safeJson(response)) as
-      | { error?: string; reason?: string; filename?: string; message?: string }
-      | null;
+    const errBody = await parseErrorResponse(response);
     return {
       ok: false,
       severity: "red",
       kind: "bad-request",
-      message: body?.message ?? body?.reason ?? "compile-api rejected request shape",
-      errors: body ? [JSON.stringify(body)] : [],
+      message:
+        errBody?.message ?? errBody?.reason ?? "compile-api rejected request shape",
+      errors: structuredBadRequestErrors(errBody),
     };
   }
 
@@ -176,17 +220,8 @@ export async function runCompileGate(
     };
   }
 
-  const body = (await safeJson(response)) as
-    | {
-        ok: boolean;
-        artifact_b64?: string;
-        stderr?: string;
-        cache_hit?: boolean;
-        error?: string;
-      }
-    | null;
-
-  if (!body) {
+  const parsed = await parseEnvelope(response);
+  if (parsed.kind === "non-json") {
     return {
       ok: false,
       severity: "red",
@@ -195,7 +230,17 @@ export async function runCompileGate(
       errors: [],
     };
   }
+  if (parsed.kind === "schema-failed") {
+    return {
+      ok: false,
+      severity: "red",
+      kind: "transport",
+      message: `compile-api 200 response failed envelope schema (artifact_b64 missing or malformed): ${parsed.summary}`,
+      errors: [parsed.summary],
+    };
+  }
 
+  const body = parsed.value;
   if (!body.ok) {
     return {
       ok: false,
@@ -203,16 +248,6 @@ export async function runCompileGate(
       kind: "compile-error",
       message: "arduino-cli compile failed",
       errors: [body.stderr ?? ""],
-    };
-  }
-
-  if (!body.artifact_b64) {
-    return {
-      ok: false,
-      severity: "red",
-      kind: "transport",
-      message: "compile-api 200 ok=true response missing artifact_b64",
-      errors: [],
     };
   }
 
@@ -227,27 +262,84 @@ export async function runCompileGate(
 }
 
 /**
- * Type-narrowing helper used by tests: returns the `GateResult` shape that
- * `pipeline/types.ts` defines, dropping the discriminated `kind`. Useful
- * when feeding the result into a generic gate orchestrator that doesn't
- * yet know about CompileGateResult's richer kinds.
+ * Parse the response body through ResponseEnvelopeSchema. Returns a
+ * tagged result so the caller can produce diagnostic messages that
+ * distinguish "non-JSON" from "JSON but malformed envelope". The 200
+ * success branch requires `artifact_b64` (enforced by
+ * SuccessResponseSchema), so a 200-with-no-artifact returns `kind:
+ * "schema-failed"` with the Zod summary inline.
  */
-export function toGateResult(result: CompileGateResult): GateResult<CompileGateValue> {
-  if (result.ok) return { ok: true, value: result.value };
-  return {
-    ok: false,
-    severity: result.severity,
-    message: result.message,
-    errors: result.errors,
-  };
+type EnvelopeParseResult =
+  | { kind: "non-json" }
+  | { kind: "schema-failed"; summary: string }
+  | { kind: "ok"; value: z.infer<typeof ResponseEnvelopeSchema> };
+
+async function parseEnvelope(response: Response): Promise<EnvelopeParseResult> {
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    return { kind: "non-json" };
+  }
+  const result = ResponseEnvelopeSchema.safeParse(raw);
+  if (result.success) return { kind: "ok", value: result.data };
+  const summary = result.error.issues
+    .map((i) => `${i.path.join(".")}: ${i.message}`)
+    .join("; ");
+  return { kind: "schema-failed", summary };
 }
 
-async function safeJson(response: Response): Promise<unknown> {
+/**
+ * Parse a 4xx body through ErrorResponseSchema. The 400 envelope is
+ * looser than the 200 success envelope (zValidator may emit `issues`
+ * without `error`); we accept any error-shaped body without forcing the
+ * field set so a future contributor can add a field without breaking
+ * the gate.
+ */
+async function parseErrorResponse(
+  response: Response,
+): Promise<ErrorResponse | null> {
+  let raw: unknown;
   try {
-    return await response.json();
+    raw = await response.json();
   } catch {
     return null;
   }
+  const result = ErrorResponseSchema.safeParse(raw);
+  return result.success ? result.data : null;
+}
+
+/**
+ * Project a bad-request error body into structured `errors[]` for the
+ * orchestrator's auto-repair turn. AC-002: previously this was
+ * `JSON.stringify(body)` — a single opaque blob Sonnet would have to
+ * re-parse. Now: each ZodIssue (if present) becomes its own string with
+ * the path and message, suitable for verbatim feeding to the LLM.
+ */
+function structuredBadRequestErrors(
+  body: ErrorResponse | null,
+): ReadonlyArray<string> {
+  if (!body) return [];
+  if (Array.isArray(body.issues) && body.issues.length > 0) {
+    return body.issues.map((issue) => formatIssue(issue));
+  }
+  if (body.reason) return [body.reason];
+  if (body.message) return [body.message];
+  return [];
+}
+
+function formatIssue(issue: unknown): string {
+  if (
+    issue &&
+    typeof issue === "object" &&
+    "path" in issue &&
+    "message" in issue
+  ) {
+    const i = issue as { path: ReadonlyArray<unknown>; message: unknown };
+    const path = Array.isArray(i.path) ? i.path.join(".") : String(i.path);
+    return `${path}: ${String(i.message)}`;
+  }
+  return JSON.stringify(issue);
 }
 
 /**
@@ -260,7 +352,7 @@ async function safeJson(response: Response): Promise<unknown> {
  *     case "timeout":       ...; break;
  *     case "auth":          ...; break;
  *     case "bad-request":   ...; break;
- *     case "rate-limited":  ...; break;
+ *     case "rate-limit":    ...; break;
  *     case "compile-error": ...; break;
  *     default: assertNeverFailureKind(result.kind);
  *   }

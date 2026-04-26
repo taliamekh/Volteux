@@ -43,7 +43,7 @@ import {
   SIZE_WARN_BYTES,
 } from "./cache.ts";
 import { createPerRequestSketchDir } from "./sketch-fs.ts";
-import { runCompile } from "./run-compile.ts";
+import { invokeArduinoCli } from "./run-compile.ts";
 
 // ---------------------------------------------------------------------------
 // Env + startup assertions
@@ -137,7 +137,23 @@ app.use("/api/compile", bearerAuth({ token: SECRET }));
 
 app.post(
   "/api/compile",
-  zValidator("json", CompileRequestSchema),
+  // Custom hook normalizes Zod's default 400 envelope (`{success:false,
+  // error:{issues,name}}`) into the same `{ok:false, error, ...}` shape
+  // every other server response uses. Discriminator is always `ok`, never
+  // `success`. AC-001.
+  zValidator("json", CompileRequestSchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          ok: false,
+          error: "bad-request",
+          message: "request body failed schema validation",
+          issues: result.error.issues,
+        },
+        400,
+      );
+    }
+  }),
   async (c) => {
     // Rate limit (in-process, per-secret). v0.1 has one secret per env so
     // this is effectively a global limit; v0.2 will key on per-IP too.
@@ -145,7 +161,7 @@ app.post(
       return c.json(
         {
           ok: false,
-          error: "rate_limited",
+          error: "rate-limit",
           message: `rate limit ${RATE_LIMIT_MAX} req / ${RATE_LIMIT_WINDOW_MS / 1000}s exceeded`,
         },
         429,
@@ -162,7 +178,7 @@ app.post(
         return c.json(
           {
             ok: false,
-            error: "filename_allowlist",
+            error: "filename-allowlist",
             filename,
             reason,
           },
@@ -203,7 +219,7 @@ app.post(
           httpStatus: 400 as const,
           body: {
             ok: false as const,
-            error: "filename_allowlist" as const,
+            error: "filename-allowlist" as const,
             filename: sketchResult.error.filename,
             reason: sketchResult.error.reason,
           },
@@ -212,7 +228,7 @@ app.post(
 
       const { handle } = sketchResult;
       try {
-        const compile = await runCompile({
+        const compile = await invokeArduinoCli({
           sketchDir: handle.path,
           fqbn: body.fqbn,
         });
@@ -221,7 +237,7 @@ app.post(
             httpStatus: 200 as const,
             body: {
               ok: false as const,
-              error: "compile_error" as const,
+              error: "compile-error" as const,
               stderr: compile.stderr,
             },
           };

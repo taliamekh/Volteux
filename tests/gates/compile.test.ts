@@ -7,11 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import {
-  runCompileGate,
-  toGateResult,
-  type CompileGateResult,
-} from "../../pipeline/gates/compile.ts";
+import { runCompileGate } from "../../pipeline/gates/compile.ts";
 
 const validReq = {
   fqbn: "arduino:avr:uno",
@@ -115,7 +111,7 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     }
   });
 
-  test("rate-limited: 429 from server is mapped to kind:'rate-limited'", async () => {
+  test("rate-limit: 429 from server is mapped to kind:'rate-limit'", async () => {
     const fetchImpl = fakeFetch(() => new Response("Too Many Requests", { status: 429 }));
     const result = await runCompileGate(validReq, {
       baseUrl: "http://test",
@@ -123,15 +119,17 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
       fetch: fetchImpl,
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.kind).toBe("rate-limited");
+    if (!result.ok) expect(result.kind).toBe("rate-limit");
   });
 
-  test("bad-request: 400 from server is mapped to kind:'bad-request' with errors[] AND populated message", async () => {
+  test("bad-request: 400 from filename allowlist surfaces reason in errors[] AND populates message", async () => {
+    // Server-side wire shape after AC-001/AC-003 normalization:
+    //   {ok: false, error: "filename-allowlist", filename, reason}
     const fetchImpl = fakeFetch(() =>
       new Response(
         JSON.stringify({
           ok: false,
-          error: "filename_allowlist",
+          error: "filename-allowlist",
           filename: "-flag.h",
           reason: "does not match /...",
         }),
@@ -146,11 +144,45 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.kind).toBe("bad-request");
-      expect(result.errors.length).toBeGreaterThan(0);
-      // T-006: message must come from body.reason (or body.message) — not
-      // the default fallback. The orchestrator's auto-repair turn keys
-      // off message for diagnostics.
+      // AC-002: errors[] now carries the structured reason verbatim,
+      // not a JSON.stringify blob. Sonnet's auto-repair turn can read it
+      // directly without re-parsing.
+      expect(result.errors).toEqual(["does not match /..."]);
       expect(result.message).toBe("does not match /...");
+    }
+  });
+
+  test("bad-request: 400 from zValidator surfaces structured ZodIssues in errors[]", async () => {
+    // AC-001: server's custom hook normalizes Zod's default 400 shape
+    // into the standard envelope with `issues` populated. AC-002: each
+    // issue becomes a `path: message` line in errors[].
+    const fetchImpl = fakeFetch(() =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "bad-request",
+          message: "request body failed schema validation",
+          issues: [
+            { code: "too_small", path: ["fqbn"], message: "String must contain at least 1 character(s)" },
+            { code: "invalid_type", path: ["sketch_main_ino"], message: "Required" },
+          ],
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const result = await runCompileGate(validReq, {
+      baseUrl: "http://test",
+      secret: "x".repeat(32),
+      fetch: fetchImpl,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("bad-request");
+      expect(result.message).toBe("request body failed schema validation");
+      expect(result.errors).toEqual([
+        "fqbn: String must contain at least 1 character(s)",
+        "sketch_main_ino: Required",
+      ]);
     }
   });
 
@@ -166,8 +198,8 @@ describe("runCompileGate — failure kinds (discriminated union)", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.kind).toBe("bad-request");
-      // safeJson returned null → message falls back to the default fallback
-      // string AND errors[] is empty (no body to JSON.stringify).
+      // parseErrorResponse returned null → message falls back to the
+      // default string and errors[] is empty.
       expect(result.message).toBe("compile-api rejected request shape");
       expect(result.errors).toEqual([]);
     }
@@ -301,32 +333,3 @@ describe("runCompileGate — request shape", () => {
   });
 });
 
-describe("toGateResult", () => {
-  test("preserves the ok branch", () => {
-    const r: CompileGateResult = {
-      ok: true,
-      value: { hex_b64: "x", stderr: "", cache_hit: false },
-    };
-    const g = toGateResult(r);
-    expect(g.ok).toBe(true);
-    if (g.ok) expect(g.value.hex_b64).toBe("x");
-  });
-
-  test("strips `kind` from the failure branch", () => {
-    const r: CompileGateResult = {
-      ok: false,
-      severity: "red",
-      kind: "compile-error",
-      message: "boom",
-      errors: ["err1"],
-    };
-    const g = toGateResult(r);
-    expect(g.ok).toBe(false);
-    if (!g.ok) {
-      expect(g.message).toBe("boom");
-      expect(g.errors).toEqual(["err1"]);
-      // No `kind` on a plain GateResult — verify by structural absence.
-      expect((g as Record<string, unknown>).kind).toBeUndefined();
-    }
-  });
-});

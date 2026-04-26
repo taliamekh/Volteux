@@ -25,14 +25,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export interface RunCompileInput {
+export interface InvokeArduinoCliInput {
   /** Absolute path to the sketch directory (from sketch-fs.ts). */
   sketchDir: string;
   /** Fully Qualified Board Name, e.g. `arduino:avr:uno`. */
   fqbn: string;
 }
 
-export type RunCompileResult =
+export type InvokeArduinoCliResult =
   | {
       ok: true;
       hex_b64: string;
@@ -48,8 +48,13 @@ export type RunCompileResult =
  *
  * The output directory and build path are siblings of the sketch directory
  * (already created by sketch-fs.ts under the per-request temp root).
+ *
+ * Renamed from `runCompile` (M-004) — the previous name was easily
+ * confused with `runCompileGate` in the pipeline-side gate client.
  */
-export async function runCompile(input: RunCompileInput): Promise<RunCompileResult> {
+export async function invokeArduinoCli(
+  input: InvokeArduinoCliInput,
+): Promise<InvokeArduinoCliResult> {
   const { sketchDir, fqbn } = input;
   // Place build/out as siblings of the sketch dir, all under the same
   // per-request temp root that sketch-fs.ts will rm -rf.
