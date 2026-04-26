@@ -83,10 +83,13 @@ import { randomUUID } from "node:crypto";
 import {
   classify as defaultClassify,
   defaultClassifyDeps,
+  type ClassifyFailureKind,
 } from "./llm/classify.ts";
 import {
   generate as defaultGenerate,
   defaultGenerateDeps,
+  type GenerateFailureKind,
+  type GenerateResult,
 } from "./llm/generate.ts";
 import {
   runSchemaGate,
@@ -99,9 +102,12 @@ import {
 } from "./rules/index.ts";
 import {
   runCompileGate as defaultRunCompileGate,
+  type CompileGateFailureKind,
 } from "./gates/compile.ts";
+import { formatHonestGap } from "./honest-gap.ts";
 import {
   NoopTraceWriter,
+  type TraceEvent,
   type TraceWriter,
 } from "./trace.ts";
 import type {
@@ -109,6 +115,14 @@ import type {
   VolteuxProjectDocument,
 } from "../schemas/document.zod.ts";
 import type { RuleAttempt } from "./rules/index.ts";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const TARGET_ARCHETYPE_ID = "uno-ultrasonic-servo";
+const CONFIDENCE_THRESHOLD = 0.6;
+const MAX_PROMPT_CHARS = 5000;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -435,7 +449,147 @@ function generateRunId(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Factory (commit-1 scaffold; commit-4 fills in the orchestration body)
+// Helpers (failure-shape construction + per-source kind mapping)
+// ---------------------------------------------------------------------------
+
+/**
+ * Construct the canonical `PipelineFailure` shape. The orchestrator
+ * uses this everywhere it returns a failure so the wire shape stays
+ * uniform regardless of which gate or LLM call surfaced the failure.
+ */
+function makeFailure(
+  kind: PipelineFailureKind,
+  message: string,
+  errors: ReadonlyArray<string> = [],
+  extras: Pick<
+    PipelineFailure,
+    "classifier_reasoning" | "compile_stderr"
+  > = {},
+): PipelineFailure {
+  return {
+    ok: false,
+    severity: "red",
+    kind,
+    message,
+    errors,
+    ...(extras.classifier_reasoning !== undefined
+      ? { classifier_reasoning: extras.classifier_reasoning }
+      : {}),
+    ...(extras.compile_stderr !== undefined
+      ? { compile_stderr: extras.compile_stderr }
+      : {}),
+  };
+}
+
+/**
+ * Map a `ClassifyFailureKind` to a `PipelineFailureKind` per the plan's
+ * decision matrix. `transport`/`sdk-error` roll up to `"transport"`;
+ * `abort` to `"aborted"`; `schema-failed` to `"transport"` (a classify
+ * schema failure is an infra-class issue — the model produced
+ * unparseable output for a tiny enum schema).
+ */
+function classifyFailureToPipelineKind(
+  kind: ClassifyFailureKind,
+): PipelineFailureKind {
+  switch (kind) {
+    case "transport":
+      return "transport";
+    case "sdk-error":
+      return "transport";
+    case "abort":
+      return "aborted";
+    case "schema-failed":
+      return "transport";
+  }
+}
+
+/**
+ * Map a `GenerateFailureKind` to a `PipelineFailureKind`. The
+ * `schema-failed` literal preserves its identity (generate has already
+ * burned its internal auto-repair turn; cross-gate repair does NOT
+ * re-call generate on this kind per the decision matrix).
+ */
+function generateFailureToPipelineKind(
+  kind: GenerateFailureKind,
+): PipelineFailureKind {
+  switch (kind) {
+    case "schema-failed":
+      return "schema-failed";
+    case "truncated":
+      return "truncated";
+    case "transport":
+      return "transport";
+    case "sdk-error":
+      return "transport";
+    case "abort":
+      return "aborted";
+  }
+}
+
+/**
+ * Map a `CompileGateFailureKind` to a `PipelineFailureKind`. Only
+ * `compile-error` becomes `compile-failed`; all other infra-class
+ * compile failures (auth/timeout/queue-full/rate-limit/bad-request/
+ * transport) roll up to `"transport"` per the plan's decision matrix.
+ */
+function compileFailureToPipelineKind(
+  kind: CompileGateFailureKind,
+): PipelineFailureKind {
+  switch (kind) {
+    case "compile-error":
+      return "compile-failed";
+    case "transport":
+    case "timeout":
+    case "auth":
+    case "bad-request":
+    case "rate-limit":
+    case "queue-full":
+      return "transport";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Trace event helpers (loose Unit 6 shape; Unit 7 tightens)
+// ---------------------------------------------------------------------------
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function emitEvent(
+  writer: TraceWriter,
+  run_id: string,
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const evt: TraceEvent = {
+    ts: nowIso(),
+    run_id,
+    event,
+    ...payload,
+  };
+  return writer.emit(evt);
+}
+
+/**
+ * Build a structured 200-char-ish digest of the failing document for
+ * the repair_attempt trace event. Uses a structured extract rather
+ * than the literal first 200 chars (the deferred-to-implementation
+ * decision per plan § Open Questions). The structured form lets the
+ * v0.5 eval harness aggregate by archetype / board / size without
+ * re-parsing the full doc.
+ */
+function digestDoc(doc: VolteuxProjectDocument): string {
+  return JSON.stringify({
+    archetype_id: doc.archetype_id,
+    board_fqbn: doc.board.fqbn,
+    components_count: doc.components.length,
+    libraries_count: doc.sketch.libraries.length,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Factory (commit-4 — full orchestration loop)
 // ---------------------------------------------------------------------------
 
 /**
@@ -449,22 +603,376 @@ function generateRunId(): string {
  *
  * Production callers use `runPipeline()` which lazily wraps
  * `defaultPipelineDeps()`; tests call this directly with mock deps.
- *
- * **Commit-1 scaffold:** the closure body throws a not-implemented
- * error — commit-4 lands the full classify→generate→[gates]→compile
- * sequence with bounded cross-gate repair. The factory's signature is
- * stable so tests + downstream consumers can target the shape today.
  */
 export function buildPipeline(
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _deps: PipelineDeps,
+  deps: PipelineDeps,
 ): (prompt: string, opts?: PipelineOptions) => Promise<PipelineResult> {
   return async function runPipelineInner(
-    _prompt: string,
-    _opts: PipelineOptions = {},
+    prompt: string,
+    opts: PipelineOptions = {},
   ): Promise<PipelineResult> {
-    throw new Error(
-      "buildPipeline body is a commit-1 scaffold; commit-4 lands the orchestration loop",
+    // ---- Input-validation guards (THROW; no recovery is meaningful) ----
+    if (prompt === "") {
+      throw new Error("empty prompt");
+    }
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new Error(`prompt exceeds ${MAX_PROMPT_CHARS} chars`);
+    }
+
+    const run_id = deps.generateRunId();
+    const cost = deps.costTrackerFactory();
+    const startedAt = Date.now();
+    const repairEnabled = opts.repair !== "off";
+    let repairCount = 0;
+
+    // Open the trace + emit the start summary. Trace I/O failures are
+    // best-effort; the writer handles them internally (NoopTraceWriter
+    // ignores all calls; Unit 7's real writer try/catches on disk I/O).
+    await deps.traceWriter.open(run_id);
+    await emitEvent(deps.traceWriter, run_id, "pipeline_summary", {
+      phase: "start",
+      prompt,
+      started_at: nowIso(),
+    });
+
+    // The end-summary + close happen on every return path via this helper.
+    const closeAndEmitEnd = async (
+      outcome: "ok" | PipelineFailureKind,
+    ): Promise<void> => {
+      await emitEvent(deps.traceWriter, run_id, "pipeline_summary", {
+        phase: "end",
+        outcome,
+        cost_usd: cost.total(),
+        total_latency_ms: Date.now() - startedAt,
+        ended_at: nowIso(),
+      });
+      await deps.traceWriter.close();
+    };
+
+    // Construct a failure result with Honest Gap + close the trace.
+    const finalize = async (
+      failure: PipelineFailure,
+    ): Promise<PipelineResult> => {
+      const honest_gap = formatHonestGap(failure, prompt);
+      await emitEvent(deps.traceWriter, run_id, "honest_gap", {
+        scope: honest_gap.scope,
+        missing_capabilities: honest_gap.missing_capabilities,
+        explanation: honest_gap.explanation,
+        trigger_kind: failure.kind,
+      });
+      await closeAndEmitEnd(failure.kind);
+      return {
+        ...failure,
+        honest_gap,
+        cost_usd: cost.total(),
+        run_id,
+      };
+    };
+
+    // -----------------------------------------------------------------
+    // Stage 1: classify
+    // -----------------------------------------------------------------
+    const classifyResult = await deps.classify(
+      prompt,
+      opts.signal !== undefined ? { signal: opts.signal } : {},
+    );
+    if (!classifyResult.ok) {
+      // Classify failure paths don't carry usage; treat as 0.
+      cost.track(
+        {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        "claude-haiku-4-5",
+      );
+      await emitEvent(deps.traceWriter, run_id, "llm_call", {
+        model: "claude-haiku-4-5",
+        attempt: 1,
+        outcome: classifyResult.kind,
+      });
+      const kind = classifyFailureToPipelineKind(classifyResult.kind);
+      return finalize(
+        makeFailure(
+          kind,
+          `classify failed: ${classifyResult.message}`,
+          classifyResult.errors.map((e) =>
+            typeof e === "string" ? e : `${e.path.join(".")}: ${e.message}`,
+          ),
+        ),
+      );
+    }
+
+    cost.track(classifyResult.usage, "claude-haiku-4-5");
+    await emitEvent(deps.traceWriter, run_id, "llm_call", {
+      model: "claude-haiku-4-5",
+      attempt: 1,
+      usage: classifyResult.usage,
+      outcome: "ok",
+    });
+
+    // Out-of-scope routing: null archetype OR low confidence OR wrong archetype.
+    if (
+      classifyResult.archetype_id === null ||
+      classifyResult.archetype_id !== TARGET_ARCHETYPE_ID ||
+      classifyResult.confidence < CONFIDENCE_THRESHOLD
+    ) {
+      return finalize(
+        makeFailure(
+          "out-of-scope",
+          `classifier routed to out-of-scope: archetype_id=${String(classifyResult.archetype_id)}, confidence=${classifyResult.confidence}`,
+          [],
+          { classifier_reasoning: classifyResult.reasoning },
+        ),
+      );
+    }
+
+    // -----------------------------------------------------------------
+    // Stages 2-6: generate → schema → xconsist → rules → compile
+    // (Loop bound: at most 2 attempts; the 2nd only fires after a
+    //  successful repair, which is itself bounded at 1.)
+    // -----------------------------------------------------------------
+    let currentDoc: VolteuxProjectDocument | null = null;
+    // Loop-scope state carrying the failing-gate context across the
+    // attempt boundary. Set in attempt 0's gate-failure paths; consumed
+    // by attempt 1's repair() call. Declared outside the loop so the
+    // attempt-1 closure can reference attempt-0's values.
+    let lastFailureKind: PipelineFailureKind | undefined;
+    let lastFailureMessage: string | undefined;
+    let lastFailureErrors: ReadonlyArray<string> | undefined;
+
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      // ---- Generate ----
+      const generateResult: GenerateResult =
+        attempt === 0
+          ? await deps.generate(
+              prompt,
+              opts.signal !== undefined ? { signal: opts.signal } : {},
+            )
+          : // Attempt 1 (post-repair): repair() is responsible for the call.
+            await deps.repair(
+              {
+                kind: lastFailureKind!,
+                message: lastFailureMessage!,
+                errors: lastFailureErrors!,
+              },
+              currentDoc!,
+              prompt,
+              (p, o) =>
+                deps.generate(
+                  p,
+                  o ??
+                    (opts.signal !== undefined ? { signal: opts.signal } : {}),
+                ),
+            );
+      if (!generateResult.ok) {
+        cost.track(
+          {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          "claude-sonnet-4-6",
+        );
+        await emitEvent(deps.traceWriter, run_id, "llm_call", {
+          model: "claude-sonnet-4-6",
+          attempt: attempt + 1,
+          outcome: generateResult.kind,
+        });
+        const kind = generateFailureToPipelineKind(generateResult.kind);
+        return finalize(
+          makeFailure(
+            kind,
+            `generate failed: ${generateResult.message}`,
+            generateResult.errors.map((e) =>
+              typeof e === "string" ? e : `${e.path.join(".")}: ${e.message}`,
+            ),
+          ),
+        );
+      }
+      cost.track(generateResult.usage, "claude-sonnet-4-6");
+      await emitEvent(deps.traceWriter, run_id, "llm_call", {
+        model: "claude-sonnet-4-6",
+        attempt: attempt + 1,
+        usage: generateResult.usage,
+        outcome: "ok",
+      });
+
+      currentDoc = generateResult.doc;
+
+      // ---- Gate sequence ----
+      // Each gate failure either: (a) triggers a repair if attempt===0
+      // and repair is enabled; or (b) routes to Honest Gap.
+      // (The lastFailureKind/Message/Errors slots are loop-scoped above.)
+
+      // Schema gate.
+      const schemaResult = deps.runSchemaGate(currentDoc);
+      await emitEvent(deps.traceWriter, run_id, "gate_outcome", {
+        gate: "schema",
+        ok: schemaResult.ok,
+        errors_count: schemaResult.ok ? 0 : schemaResult.errors.length,
+      });
+      if (!schemaResult.ok) {
+        // generate() already auto-repaired schema failures internally;
+        // a schema failure escaping here means the SDK's parse passed
+        // but our schema rejected it (impossible in practice unless deps
+        // are mismatched). No further repair — surface as schema-failed.
+        return finalize(
+          makeFailure(
+            "schema-failed",
+            schemaResult.message,
+            schemaResult.errors.map((e) =>
+              typeof e === "string" ? e : `${e.path.join(".")}: ${e.message}`,
+            ),
+          ),
+        );
+      }
+
+      // Cross-consistency gate.
+      const xcResult = deps.runCrossConsistencyGate(currentDoc);
+      await emitEvent(deps.traceWriter, run_id, "gate_outcome", {
+        gate: "xconsist",
+        ok: xcResult.ok,
+        errors_count: xcResult.ok ? 0 : xcResult.errors.length,
+      });
+      if (!xcResult.ok) {
+        const errors = xcResult.errors.map((e) =>
+          typeof e === "string" ? e : `${e.path.join(".")}: ${e.message}`,
+        );
+        if (attempt === 0 && repairEnabled && repairCount === 0) {
+          repairCount++;
+          await emitEvent(deps.traceWriter, run_id, "repair_attempt", {
+            trigger_kind: "xconsist-failed",
+            prior_doc_digest: digestDoc(currentDoc),
+          });
+          lastFailureKind = "xconsist-failed";
+          lastFailureMessage = xcResult.message;
+          lastFailureErrors = errors;
+          // Loop continues; attempt 1 will call repair().
+          continue;
+        }
+        return finalize(
+          makeFailure("xconsist-failed", xcResult.message, errors),
+        );
+      }
+
+      // Rules engine.
+      const rulesOutcome = deps.runRules(currentDoc);
+      await emitEvent(deps.traceWriter, run_id, "gate_outcome", {
+        gate: "rules",
+        ok: rulesOutcome.red.length === 0,
+        red_count: rulesOutcome.red.length,
+        amber_count: rulesOutcome.amber.length,
+        blue_count: rulesOutcome.blue.length,
+      });
+      if (rulesOutcome.red.length > 0) {
+        const errors = rulesOutcome.red.map((a) => {
+          const result = a.result;
+          if ("message" in result) return `${a.rule.id}: ${result.message}`;
+          return a.rule.id;
+        });
+        if (attempt === 0 && repairEnabled && repairCount === 0) {
+          repairCount++;
+          await emitEvent(deps.traceWriter, run_id, "repair_attempt", {
+            trigger_kind: "rules-red",
+            prior_doc_digest: digestDoc(currentDoc),
+          });
+          lastFailureKind = "rules-red";
+          lastFailureMessage = `rules red: ${rulesOutcome.red.length} violation(s)`;
+          lastFailureErrors = errors;
+          continue;
+        }
+        return finalize(
+          makeFailure(
+            "rules-red",
+            `rules red: ${rulesOutcome.red.length} violation(s)`,
+            errors,
+          ),
+        );
+      }
+
+      // Compile gate.
+      const compileResult = await deps.runCompileGate({
+        fqbn: currentDoc.board.fqbn,
+        sketch_main_ino: currentDoc.sketch.main_ino,
+        additional_files: currentDoc.sketch.additional_files,
+        libraries: currentDoc.sketch.libraries,
+      });
+      await emitEvent(deps.traceWriter, run_id, "compile_call", {
+        ok: compileResult.ok,
+        kind: compileResult.ok ? undefined : compileResult.kind,
+        cache_hit: compileResult.ok ? compileResult.value.cache_hit : false,
+        hex_size_bytes: compileResult.ok
+          ? compileResult.value.hex_size_bytes
+          : 0,
+        latency_ms: compileResult.ok ? compileResult.value.latency_ms : 0,
+        toolchain_version_hash: compileResult.ok
+          ? compileResult.value.toolchain_version_hash
+          : undefined,
+        errors_count: compileResult.ok ? 0 : compileResult.errors.length,
+      });
+      if (!compileResult.ok) {
+        const kind = compileFailureToPipelineKind(compileResult.kind);
+        const errors = [...compileResult.errors];
+        if (
+          kind === "compile-failed" &&
+          attempt === 0 &&
+          repairEnabled &&
+          repairCount === 0
+        ) {
+          repairCount++;
+          await emitEvent(deps.traceWriter, run_id, "repair_attempt", {
+            trigger_kind: "compile-failed",
+            prior_doc_digest: digestDoc(currentDoc),
+          });
+          lastFailureKind = "compile-failed";
+          lastFailureMessage = compileResult.message;
+          lastFailureErrors = errors;
+          continue;
+        }
+        return finalize(
+          makeFailure(
+            kind,
+            compileResult.message,
+            errors,
+            kind === "compile-failed"
+              ? { compile_stderr: errors[0] ?? "" }
+              : {},
+          ),
+        );
+      }
+
+      // ---- Success ----
+      await emitEvent(deps.traceWriter, run_id, "pipeline_summary", {
+        phase: "end",
+        outcome: "ok",
+        cost_usd: cost.total(),
+        total_latency_ms: Date.now() - startedAt,
+        ended_at: nowIso(),
+      });
+      await deps.traceWriter.close();
+      return {
+        ok: true,
+        doc: currentDoc,
+        hex_b64: compileResult.value.hex_b64,
+        cost_usd: cost.total(),
+        run_id,
+        amber: rulesOutcome.amber,
+        blue: rulesOutcome.blue,
+      };
+    }
+
+    // Unreachable in practice — both attempts handle every gate-failure
+    // path. If the loop falls through somehow (defensive), surface as
+    // transport so the caller doesn't get a malformed result.
+    return finalize(
+      makeFailure(
+        "transport",
+        "pipeline loop fell through without producing a result",
+        [],
+      ),
     );
   };
 }
