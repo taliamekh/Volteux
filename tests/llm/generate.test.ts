@@ -302,8 +302,14 @@ describe("buildGenerator — auto-repair retry (success)", () => {
     );
     expect(messages[1]?.role).toBe("assistant");
     expect(messages[2]?.role).toBe("user");
-    // The last turn must contain the schema-error feedback.
-    expect(messages[2]?.content).toContain("schema validation");
+    // The last turn must contain the structured-output-validation feedback.
+    // The wording explicitly says "your previous attempt failed
+    // structured-output validation" so the model treats the assistant
+    // content as context (a stand-in for its raw output, which the SDK's
+    // throw path doesn't expose) rather than a faithful echo of its own
+    // prior speech.
+    expect(messages[2]?.content).toContain("structured-output validation");
+    expect(messages[2]?.content).toContain("Zod issues");
 
     // System blocks are UNCHANGED across attempts — the cached prefix
     // stays byte-identical so cache_read fires.

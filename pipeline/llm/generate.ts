@@ -47,13 +47,23 @@
  * the cached system block is the same class of static-vs-runtime drift.
  *
  * **Auto-repair shape (no assistant prefill).** Retry messages are
- *   system → user(original) → assistant(prior content as completed turn)
- *   → user(zod errors).
+ *   system → user(original)
+ *          → assistant(repair_context_from_validator)
+ *          → user(repair instruction with zod errors).
  * The last turn is a USER turn, not an assistant-suffixed prefill. The
  * "fresh user turn carrying ZodIssues, not assistant-prefill" pattern
  * works on every Anthropic model version regardless of whether
  * Sonnet 4.6+ rejects prefill (the integration test probes that
  * outcome and documents it).
+ *
+ * The assistant turn carries the SDK's parse-error message — NOT the
+ * model's actual prior raw output. `messages.parse` does not expose
+ * raw text on its throw path; fetching it via a second `messages.create`
+ * would double-charge tokens for the schema-failed path. The user-turn
+ * repair instruction explicitly names this ("your previous attempt
+ * failed structured-output validation") so the model treats the
+ * assistant content as conversational context rather than a faithful
+ * echo of its own prior speech. See `buildRepairMessages` docstring.
  *
  * **Few-shot padding source discipline.** `defaultGenerateDeps()` reads
  * ONLY from `pipeline/prompts/` (synchronously via `Bun.file().text()`
@@ -464,16 +474,32 @@ function buildSystemBlocks(deps: GenerateDeps): TextBlockParam[] {
  * Build the auto-repair retry messages. The cached system blocks are
  * passed unchanged; the new turns sit AFTER them. The retry sends:
  *   user(original prompt)
- *   assistant(prior content as completed turn)  ← NOT a prefill
- *   user("Your previous output failed schema validation: ...; return corrected JSON.")
+ *   assistant(repair_context_from_validator as completed turn) ← NOT a prefill
+ *   user("Your previous attempt failed structured-output validation: ...; return corrected JSON.")
  *
  * The last turn is a USER turn. The model treats this as a normal
  * conversational continuation, not an assistant-suffixed prefill that
  * Sonnet 4.6+ may reject.
+ *
+ * **Why we feed a validator message into the assistant turn (not the
+ * model's actual raw output).** When `messages.parse` rejects on Zod
+ * validation it throws an `AnthropicError("Failed to parse structured
+ * output: <inner>")` — the SDK does NOT expose the model's raw
+ * generated text on the throw path. The auto-repair could fetch it via
+ * a second non-parse `messages.create` call, but that doubles the
+ * schema-failed-path cost (input tokens + output tokens billed twice
+ * for the same content) for a modest information gain. We accept the
+ * tradeoff: the assistant turn carries the validator's error context
+ * (a stand-in for what the model produced), and the next user turn
+ * EXPLICITLY says "your previous attempt failed structured-output
+ * validation" so the model treats the assistant content as
+ * conversational context rather than a faithful echo of its own prior
+ * speech. The integration tests confirm Sonnet 4.6 accepts this shape
+ * and produces a valid corrected document.
  */
 function buildRepairMessages(
   userPrompt: string,
-  priorAssistantText: string,
+  repairContextFromValidator: string,
   zodIssues: ReadonlyArray<ZodIssue>,
 ): MessageParam[] {
   const issueLines = zodIssues
@@ -486,11 +512,12 @@ function buildRepairMessages(
   const issueSuffix =
     zodIssues.length > 10 ? `\n  ... and ${zodIssues.length - 10} more issue(s)` : "";
   const repairText =
-    `Your previous output failed schema validation:\n${issueLines}${issueSuffix}\n\n` +
+    `Your previous attempt failed structured-output validation with this error: ${repairContextFromValidator}\n\n` +
+    `The full Zod issues are:\n${issueLines}${issueSuffix}\n\n` +
     `Return a corrected JSON document that satisfies the schema. JSON only — no markdown fences, no prose.`;
   return [
     { role: "user", content: userPrompt },
-    { role: "assistant", content: priorAssistantText },
+    { role: "assistant", content: repairContextFromValidator },
     { role: "user", content: repairText },
   ];
 }
@@ -581,7 +608,12 @@ export function buildGenerator(
     const outputFormat = makeOutputFormat();
 
     // ---- Attempt 1 ---------------------------------------------------------
-    let priorAssistantText = "";
+    // `repairContextFromValidator` is the SDK's parse-error message we
+    // feed into the assistant turn of the auto-repair retry as a
+    // stand-in for the model's actual raw output (which `messages.parse`
+    // does not expose on throw). The repair-instruction user turn is
+    // explicit about what this is — see `buildRepairMessages` doc.
+    let repairContextFromValidator = "";
     let zodIssues: ReadonlyArray<ZodIssue> = [];
 
     try {
@@ -630,16 +662,19 @@ export function buildGenerator(
       };
     } catch (err) {
       // Structured-output parse failure: the SDK threw because our
-      // `parse()` rejected the JSON. Capture issues + the raw assistant
-      // content (read from a fresh non-parse call wouldn't be available
-      // — the parse-throw path doesn't expose `response`). Instead we
-      // rely on extractZodIssues + a generic placeholder for the prior
-      // assistant text. A second non-parse `messages.create` to retrieve
-      // the raw text would double-charge tokens; the integration tests
-      // confirm the model accepts the repair without it.
+      // `parse()` rejected the JSON. The SDK does NOT expose the
+      // model's raw generated text on this throw path; we'd have to
+      // make a second non-parse `messages.create` call to get it,
+      // which would double-charge tokens for the schema-failed path.
+      // Instead we feed the validator's error message into the
+      // assistant turn (as a stand-in) and the next user turn
+      // explicitly says "your previous attempt failed validation" so
+      // the model treats the assistant content as context, not as its
+      // own faithful prior speech. Integration tests confirm this
+      // shape produces valid corrected output.
       if (isStructuredOutputParseError(err)) {
         zodIssues = extractZodIssues(err);
-        priorAssistantText = extractMessage(err);
+        repairContextFromValidator = extractMessage(err);
         // Fall through to attempt 2.
       } else {
         // Pre-fetch / mid-fetch / SDK-retry-exhausted throws.
@@ -670,7 +705,11 @@ export function buildGenerator(
           model: deps.model,
           max_tokens: deps.maxTokens,
           system: systemBlocks,
-          messages: buildRepairMessages(prompt, priorAssistantText, zodIssues),
+          messages: buildRepairMessages(
+            prompt,
+            repairContextFromValidator,
+            zodIssues,
+          ),
           output_config: { format: outputFormat },
         },
         innerOpts.signal !== undefined
