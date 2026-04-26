@@ -264,8 +264,20 @@ function makeMockDeps(input: MockDeps): {
 // Helpers to query the recorded trace
 // ---------------------------------------------------------------------------
 
-function eventsOfKind(writer: RecordingWriter, event: string): TraceEvent[] {
-  return writer.events.filter((e) => e.event === event);
+/**
+ * Type-narrowing event filter. Unit 7 tightened `TraceEvent` into a
+ * discriminated union over the 6 event-name literals; this helper
+ * returns the narrowed variant so test assertions can read variant-
+ * specific fields (`model`, `gate`, `phase`, etc.) without a manual
+ * cast at every call site.
+ */
+function eventsOfKind<K extends TraceEvent["event"]>(
+  writer: RecordingWriter,
+  event: K,
+): Extract<TraceEvent, { event: K }>[] {
+  return writer.events.filter(
+    (e): e is Extract<TraceEvent, { event: K }> => e.event === event,
+  );
 }
 
 // ===========================================================================
@@ -316,7 +328,11 @@ describe("buildPipeline — happy path (mocked)", () => {
     expect(summaries.length).toBe(2);
     expect(summaries[0]?.phase).toBe("start");
     expect(summaries[1]?.phase).toBe("end");
-    expect(summaries[1]?.outcome).toBe("ok");
+    // Narrow to the END variant for the outcome assertion.
+    const endSummary = summaries[1];
+    if (endSummary !== undefined && endSummary.phase === "end") {
+      expect(endSummary.outcome).toBe("ok");
+    }
   });
 
   test("happy path with cross-gate repair (compile-fail → repair → compile-pass)", async () => {
@@ -761,7 +777,11 @@ describe("buildPipeline — trace lifecycle", () => {
     const prompt = "the verbatim prompt";
     await run(prompt);
     const summaries = eventsOfKind(writer, "pipeline_summary");
-    expect(summaries[0]?.prompt).toBe(prompt);
+    // Narrow to the START variant for the prompt assertion.
+    const startSummary = summaries[0];
+    if (startSummary !== undefined && startSummary.phase === "start") {
+      expect(startSummary.prompt).toBe(prompt);
+    }
   });
 
   test("trace's compile_call carries cache_hit + hex_size_bytes + toolchain_version_hash on success", async () => {

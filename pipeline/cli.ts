@@ -357,9 +357,13 @@ export async function runCli(
     );
   }
 
-  // Emit trace path marker (Unit 7's writer will land at traces/<run_id>.jsonl;
-  // commit-1's NoopTraceWriter doesn't actually write a file, but the
-  // marker still locates the canonical path Unit 7 will use).
+  // Emit trace path marker. By the time runPipeline() returns, the
+  // orchestrator's defaultTraceWriter has already written + closed the
+  // file at this path (or — on dry-run / NoopTraceWriter — left the
+  // marker as a deterministic locator for the canonical path the
+  // production writer would use). The marker stays a single
+  // deterministic stderr line so agents grepping `TRACE_PATH=` can
+  // extract the path without parsing.
   deps.stderr(`TRACE_PATH=traces/${result.run_id}.jsonl\n`);
 
   const payload = flags.json
