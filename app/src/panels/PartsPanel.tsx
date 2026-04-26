@@ -44,7 +44,7 @@ export default function PartsPanel({ project, owned, setOwned }: PartsPanelProps
             </div>
             <div className="part-info">
               <div className="part-name">{p.name}</div>
-              <div className="part-sku">{p.sku}</div>
+              <div className="part-sku">SKU {p.sku}</div>
             </div>
             <span className="part-qty">×{p.qty}</span>
             <span className="part-price">${p.price.toFixed(2)}</span>

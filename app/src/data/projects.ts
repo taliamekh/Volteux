@@ -110,7 +110,7 @@ export function applyRefinement(
     p.parts.push({
       id: "buzzer",
       name: "Piezo buzzer",
-      sku: "SKU 1536",
+      sku: "1536",
       price: 1.95,
       qty: 1,
       icon: "buzzer",

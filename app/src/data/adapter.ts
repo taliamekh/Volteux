@@ -266,7 +266,7 @@ export function pipelineToProject(doc: VolteuxProjectDocument): Project {
     parts.push({
       id: c.id,
       name: entry.name,
-      sku: `SKU ${entry.sku}`,
+      sku: entry.sku,
       price: DEFAULT_PRICE_BY_SKU[entry.sku] ?? 0,
       qty: c.quantity,
       icon: iconForEntry(entry),
