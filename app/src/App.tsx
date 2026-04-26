@@ -74,25 +74,87 @@ export default function App() {
     else localStorage.removeItem("volteux_user");
   }, [user]);
 
-  // Restore project from URL hash on mount. If decode fails (empty hash,
-  // gibberish, schema-invalid payload), fall through to landing — no toast,
-  // no console error spam. Per CLAUDE.md "no silent failures", decode itself
-  // surfaces failure as `null`; the caller (this effect) decides UX.
+  // Reset-to-landing: shared by the user-triggered logo/new-project click
+  // path (goLanding) and the new hashchange empty-hash branch. The clearHash
+  // flag distinguishes the two: user-click owns the navigation and must
+  // clear the URL hash; the hashchange path is reacting to the browser
+  // already changing the hash, so it must NOT write back. Both paths flip
+  // the loop guard so the project-change write effect skips the implicit
+  // null setProject — defensive: today the write effect early-returns on
+  // null project.document, but a future refactor of that effect should not
+  // be a re-entrancy bug here.
+  const resetToLanding = (opts: { clearHash: boolean }) => {
+    setView("landing");
+    setPrompt("");
+    setProject(null);
+    if (opts.clearHash && window.location.hash) {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
+    }
+    restoredFromHashRef.current = true;
+  };
+
+  // Decode + apply a hash, shared by mount-restore and hashchange. Returns
+  // true if a project was restored, false otherwise (empty / invalid hash).
+  // Flips the loop guard before setProject so the write effect skips. Per
+  // CLAUDE.md "no silent failures", decode() surfaces failure as null; this
+  // helper passes that null through and the caller decides UX (mount stays
+  // on landing, hashchange preserves current state).
+  const restoreFromHash = async (hash: string): Promise<boolean> => {
+    const doc = await decode(hash);
+    if (!doc) return false;
+    const restored = pipelineToProject(doc);
+    restoredFromHashRef.current = true;
+    setProject(restored);
+    setView("result");
+    return true;
+  };
+
+  // Restore project from URL hash on mount.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const hash = window.location.hash;
       if (!hash) return;
-      const doc = await decode(hash);
-      if (cancelled || !doc) return;
-      const restored = pipelineToProject(doc);
-      restoredFromHashRef.current = true;
-      setProject(restored);
-      setView("result");
+      const ok = await restoreFromHash(hash);
+      if (cancelled) return;
+      // If decode failed (gibberish, schema-invalid payload), fall through
+      // to landing — no toast, no console error spam. The boolean is
+      // informational; mount has nothing to do on failure.
+      void ok;
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sync project state when the hash changes via browser back/forward
+  // (or any direct location.hash assignment elsewhere). history.replaceState
+  // and pushState do NOT fire hashchange, so our own writes from the
+  // project-change effect don't trigger this — the loop guard is defensive
+  // for symmetry with the mount restore.
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash;
+      if (!hash || hash === "#") {
+        // explicit user nav away from any project — return to landing via
+        // the same code path the logo/new-project click uses, so loop-guard
+        // and any future side effects stay symmetric.
+        resetToLanding({ clearHash: false });
+        return;
+      }
+      // Fire and forget: a stale resolution arriving after a newer
+      // hashchange would just briefly flicker before the newer one wins.
+      // No state corruption (decode is pure, setProject is idempotent).
+      void restoreFromHash(hash);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Write the document to the URL hash whenever the project changes. Skip
@@ -177,17 +239,8 @@ export default function App() {
   };
 
   const goLanding = () => {
-    setView("landing");
-    setPrompt("");
-    setProject(null);
-    // Clear the URL hash so a reload from this state lands on the empty hero,
-    // not on the previous project the user just left. Also flip the loop
-    // guard so the project-change effect doesn't immediately re-write the
-    // hash from the now-null project (which it wouldn't, but be explicit).
-    if (window.location.hash) {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-    restoredFromHashRef.current = true;
+    // Logo / new-project click owns the navigation, so clear the hash too.
+    resetToLanding({ clearHash: true });
   };
 
   return (
