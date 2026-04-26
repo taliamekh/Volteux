@@ -63,10 +63,13 @@ The JSON contract at `schemas/document.schema.json` is the single integration po
 
 ## Open decisions
 
-See [docs/PLAN.md](./docs/PLAN.md) for the full list. The two highest-priority unresolved decisions:
+See [docs/PLAN.md](./docs/PLAN.md) for the full list. Highest-priority unresolved:
 
-1. **Schema v1.5 fields emitted in v0:** fail or warn? (Decide by end of week 2.)
-2. **28 visual identity decisions** (typography, accent color, 3D scene aesthetic, etc.) — captured in the `Visual Design — Unresolved Decisions` section of `docs/PLAN.md`. Defer to a dedicated visual design session before week 3.
+1. **28 visual identity decisions** (typography, accent color, 3D scene aesthetic, etc.) — captured in the `Visual Design — Unresolved Decisions` section of `docs/PLAN.md`. Defer to a dedicated visual design session before week 3.
+
+### Resolved
+
+- **Schema v1.5 fields emitted in v0 → warn (amber).** Layered enforcement: unknown top-level fields fail at the schema gate (`VolteuxProjectDocumentSchema.strict()`); known v1.5 fields on archetype 1 (`captive_portal_ssid`, `aio_feed_names`, `mdns_name`) surface as amber via [`pipeline/rules/archetype-1/no-v15-fields-on-archetype-1.ts`](./pipeline/rules/archetype-1/no-v15-fields-on-archetype-1.ts). Tightening to red is a v0.2-or-later measured decision once acceptance traces show whether the LLM ever emits these on archetype 1 (current measurement: 0/25 tuning prompts). See `schemas/CHANGELOG.md` v0.1 entry.
 
 ## Skill routing (gstack)
 
