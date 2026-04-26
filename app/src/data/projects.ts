@@ -70,23 +70,10 @@ export function applyRefinement(
     }
   }
 
-  // "really close" / "trigger when closer" → tighten the threshold.
-  // Update both representations: legacy p.code (still mutated for any consumer
-  // that hasn't migrated yet) AND p.sketchSource + p.document.sketch.main_ino
-  // (what Monaco renders + what the URL-hash share encodes). Per code review
-  // (kt-001/api-001), refinements that only touch p.code are silently invisible
-  // because U4 swapped CodePanel to render sketchSource via Monaco.
+  // "really close" / "trigger when closer" → tighten the threshold in both
+  // representations the UI renders: p.sketchSource (Monaco) and
+  // p.document.sketch.main_ino (URL-hash share).
   if (/really close|closer|10\s*cm|nearby/.test(r)) {
-    p.code = p.code.map((line) =>
-      line.kind === "raw"
-        ? {
-            kind: "raw",
-            parts: line.parts.map((part) =>
-              part.k === "num" && part.t === "25" ? { k: "num" as const, t: "10" } : part,
-            ),
-          }
-        : line,
-    );
     p.sketchSource = p.sketchSource.replace(/distance < 25/g, "distance < 10");
     p.document = {
       ...p.document,
@@ -134,24 +121,6 @@ export function applyRefinement(
         },
       ],
     };
-    changed = true;
-  }
-
-  // "stay open longer" — kept for the (currently unreachable) automatic-gate
-  // archetype. Dead code today; flagged in maintainability review M-04 for
-  // cleanup once the archetype is either added or formally dropped.
-  if (/longer|more time|stay open/.test(r) && project.key === "automatic-gate") {
-    p.code = p.code.map((line) =>
-      line.kind === "raw"
-        ? {
-            kind: "raw",
-            parts: line.parts.map((part) =>
-              part.k === "num" && part.t === "5000" ? { k: "num" as const, t: "10000" } : part,
-            ),
-          }
-        : line,
-    );
-    p.sketchSource = p.sketchSource.replace(/delay\(5000\)/g, "delay(10000)");
     changed = true;
   }
 

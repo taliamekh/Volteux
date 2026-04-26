@@ -52,36 +52,18 @@ export interface WiringConnection {
   pin: string;
 }
 
-export type CodeSegmentKind = "kw" | "fn" | "str" | "com" | "num" | "";
-
-export interface CodeSegment {
-  k: CodeSegmentKind;
-  t: string;
-}
-
-export type CodeLine =
-  | { kind: "com"; text: string }
-  | { kind: "blank" }
-  | { kind: "raw"; parts: CodeSegment[] };
-
 export interface Project {
   /** Stable key used for resets / equality checks. */
   key: string;
-  /** Original prompt the user typed (or the canned example). */
-  prompt?: string;
-  /** Keywords used by the local matcher — UI-only metadata (legacy). */
-  match: string[];
   board: string;
   confidence: number;
   title: string;
   blurb: string;
   parts: Part[];
   wiring: WiringConnection[];
-  code: CodeLine[];
   /**
-   * Raw .ino source for the Monaco editor (U4). Populated by the adapter
-   * from `document.sketch.main_ino`. Keep `code` populated alongside as a
-   * U1-window fallback until U4 lands.
+   * Raw .ino source for the Monaco editor. Populated by the adapter from
+   * `document.sketch.main_ino`.
    */
   sketchSource: string;
   /**

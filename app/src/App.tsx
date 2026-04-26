@@ -244,8 +244,7 @@ export default function App() {
   };
 
   const finishLoading = () => {
-    const proj = pipelineToProject(loadDefaultFixture());
-    setProject({ ...proj, prompt });
+    setProject(pipelineToProject(loadDefaultFixture()));
     setView("result");
   };
 
@@ -317,8 +316,7 @@ export default function App() {
             onSeeExample={() => {
               const exampleText = "a robot arm that waves when something gets close";
               setPrompt(exampleText);
-              const proj = pipelineToProject(loadDefaultFixture());
-              setProject({ ...proj, prompt: exampleText });
+              setProject(pipelineToProject(loadDefaultFixture()));
               setView("result");
             }}
             setHeaderCtaVisible={setHeaderCtaVisible}
