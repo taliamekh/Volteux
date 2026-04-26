@@ -13,7 +13,7 @@
     "compile:up": "docker run --rm -p 8787:8787 -e COMPILE_API_SECRET=\"$COMPILE_API_SECRET\" volteux-compile",
     "compile:server": "bun run infra/server/compile-api.ts",
     "measure:prompt-tokens": "bun scripts/measure-prompt-tokens.ts",
-    "smoke": "bun scripts/v01-pipeline-io-smoke.ts"
+    "pipeline": "bun pipeline/cli.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.3.13",
