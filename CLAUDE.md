@@ -10,14 +10,14 @@ AI-powered Arduino starter kit web tool for absolute beginners. Beginner types a
 
 **Documented solutions:** [`docs/solutions/`](./docs/solutions/) — learnings from past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
 
-## Track ownership (locked)
+## Track ownership
+
+> **2026-04-26 — handoff.** Talia handed Volteux off to Kai (Talia's Claude usage exhausted); Kai is now sole owner of both tracks for the v0 finish. The two-track partition below is preserved for architectural clarity (UI surface vs pipeline surface), not for ownership.
 
 | Track | Owner | Surface |
 |---|---|---|
-| Track 1 — UI / Frontend | **Talia** | React-Three-Fiber 3D scene, 2D breadboard SVG, Monaco sketch viewer, parts list, WebUSB flash UX, error boundary, URL-hash persistence, UI snapshot tests |
+| Track 1 — UI / Frontend | **Kai** (was Talia until 2026-04-26) | React-Three-Fiber 3D scene, 2D breadboard SVG, Monaco sketch viewer, parts list, WebUSB flash UX, error boundary, URL-hash persistence, UI snapshot tests |
 | Track 2 — Pipeline / Backend | **Kai** | LLM prompting (Anthropic structured output), schema gate (Zod), arduino-cli compile gate, rules engine, cross-consistency gate, intent classifier (Haiku 4.5), Honest Gap, eval harness (with Wokwi), meta-harness loop, compile API + share service, pipeline CI |
-
-Don't swap mid-stream. Daily-life questions outside your track go to the owner; you don't make calls there alone.
 
 ## Schema discipline (non-negotiable)
 
