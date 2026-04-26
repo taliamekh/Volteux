@@ -228,10 +228,11 @@ export function buildSchemaPrimer(): string {
   lines.push("");
   lines.push("## Component registry (the only authoritative source)");
   lines.push("");
-  for (const sku of Object.keys(COMPONENTS)) {
-    // Indexed access requires the bracket form; COMPONENTS keys are SKU strings.
-    const entry = (COMPONENTS as Readonly<Record<string, (typeof COMPONENTS)[keyof typeof COMPONENTS]>>)[sku];
-    if (!entry) continue;
+  // `Object.values(COMPONENTS)` is typed correctly off the `as const`
+  // declaration in components/registry.ts — no cast or undefined guard
+  // needed. Iterating values directly avoids the bracket-access lookup
+  // and the dead `if (!entry) continue` guard the previous shape required.
+  for (const entry of Object.values(COMPONENTS)) {
     lines.push(`- SKU ${entry.sku}: ${entry.name} (type: ${entry.type})`);
     if (entry.pin_metadata.length > 0) {
       const pinSummary = entry.pin_metadata
@@ -402,9 +403,17 @@ function buildSystemBlocks(deps: GenerateDeps): TextBlockParam[] {
   }
   // Mark ONLY the last block. The SDK transmits the boundary verbatim;
   // user/assistant turns appended AFTER do not invalidate the prefix.
-  const last = blocks[blocks.length - 1];
+  // Replace via spread (immutable update) rather than mutating the
+  // existing element in place — keeps the function aligned with the
+  // codebase-wide immutability convention without changing the wire
+  // payload.
+  const lastIdx = blocks.length - 1;
+  const last = blocks[lastIdx];
   if (last !== undefined) {
-    last.cache_control = { type: "ephemeral", ttl: "1h" };
+    blocks[lastIdx] = {
+      ...last,
+      cache_control: { type: "ephemeral", ttl: "1h" },
+    };
   }
   return blocks;
 }
