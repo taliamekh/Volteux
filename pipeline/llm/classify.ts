@@ -231,34 +231,67 @@ export function assertNeverClassifyFailureKind(kind: never): never {
 }
 
 // ---------------------------------------------------------------------------
-// Default deps factory (lazy)
+// Default deps factory (lazy, in-flight promise)
 // ---------------------------------------------------------------------------
 
-let cachedDefaultDeps: ClassifyDeps | null = null;
+/**
+ * The lazy-initialization slot stores the in-flight PROMISE, not the
+ * resolved deps. Concurrent callers (e.g. two simultaneous
+ * `await defaultClassifyDeps()` from a parallelized smoke run) share
+ * the same single in-flight initialization — they all `await` the same
+ * promise. Without this, both concurrent calls would pass the `null`
+ * check before the first `await` resolved, both would construct an
+ * Anthropic client, and the second assignment would silently win — the
+ * first client (and its connection pool) would be abandoned.
+ *
+ * Also makes the cache safe under bun's shared-module test runner:
+ * `_resetDefaultDepsForTest()` clears the slot so subsequent unit tests
+ * get a fresh deps instead of reusing a real client populated by a
+ * preceding integration test.
+ */
+let cachedDefaultDepsPromise: Promise<ClassifyDeps> | null = null;
 
 /**
  * Build the default deps. Reads the prompt source from
  * `pipeline/prompts/intent-classifier-system.md` synchronously via
  * `Bun.file().text()` on first call. Reads the env var
  * `ANTHROPIC_API_KEY` indirectly through `createAnthropicClient()`.
- * Cached after first call so repeated `classify()` invocations share a
- * single client.
+ * Cached as an in-flight promise after first call so repeated
+ * `classify()` invocations share a single client AND concurrent
+ * first-callers share a single initialization (no duplicate Anthropic
+ * clients constructed under contention).
  *
  * Throws if `ANTHROPIC_API_KEY` is missing OR the prompt source file is
  * missing. These are configuration errors at the dev workstation level;
  * surfacing them as throws (not a `kind: "transport"` return) is
  * intentional — the caller is wrong, no recovery is meaningful.
  */
-export async function defaultClassifyDeps(): Promise<ClassifyDeps> {
-  if (cachedDefaultDeps !== null) return cachedDefaultDeps;
-  const systemPromptSource = await Bun.file(SYSTEM_PROMPT_PATH).text();
-  cachedDefaultDeps = {
-    client: createAnthropicClient(),
-    systemPromptSource,
-    model: DEFAULT_MODEL,
-    maxTokens: DEFAULT_MAX_TOKENS,
-  };
-  return cachedDefaultDeps;
+export function defaultClassifyDeps(): Promise<ClassifyDeps> {
+  if (cachedDefaultDepsPromise !== null) return cachedDefaultDepsPromise;
+  cachedDefaultDepsPromise = (async () => {
+    const systemPromptSource = await Bun.file(SYSTEM_PROMPT_PATH).text();
+    return {
+      client: createAnthropicClient(),
+      systemPromptSource,
+      model: DEFAULT_MODEL,
+      maxTokens: DEFAULT_MAX_TOKENS,
+    };
+  })();
+  return cachedDefaultDepsPromise;
+}
+
+/**
+ * Test-only escape hatch. Production code MUST NOT import from here.
+ *
+ * Bun's test runner shares modules across files; without this reset,
+ * an integration test that populates `cachedDefaultDepsPromise` with a
+ * real-client deps would leak that client into subsequent unit tests
+ * that exercise the convenience `classify()` wrapper, regardless of
+ * mock-injection intent. Mirrors `infra/server/cache.ts`'s
+ * `__testing.resetMemoizedHash()` pattern.
+ */
+export function _resetDefaultDepsForTest(): void {
+  cachedDefaultDepsPromise = null;
 }
 
 // ---------------------------------------------------------------------------
