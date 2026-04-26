@@ -41,7 +41,7 @@ Two-person team, locked tracks (no swapping mid-stream):
 
 **Pre-hackathon:** ~10-12 weeks of planned parallel work between Talia and Kai. Most of the design + planning happened over weeks. Schema is locked, component registry is authored, fixture exists, pipeline gates are mostly built.
 
-**Right now:** **12-hour MLH hackathon sprint.** We are NOT shipping the full v0 production. We are shipping a **polished interactive demo** that tells the story end-to-end so judges can interact with it.
+**Right now:** **MLH hackathon, FULL PRODUCTION push targeting 9:30 AM deploy.** Real backend (Kai on Vultr), real frontend (Vercel + volteux.com), real Web Serial flash to a physical Arduino Uno on Talia's desk. NOT a polished demo — judges should be able to use the live product end-to-end.
 
 **MLH Tracks we're going for:**
 - General hackathon prizes
@@ -158,30 +158,30 @@ These all live in `TODOS.md` as full entries. Summary:
 
 ---
 
-## Hackathon scope (12-hour ship list)
+## Hackathon scope — FULL PRODUCTION push
 
-Full checklist at `HACKATHON-CHECKLIST.md` (also in this repo, also as a Google Doc Talia can check off).
+Full checklist at `HACKATHON-CHECKLIST.md` (split into Kai's tasks vs. Talia+Claude's tasks vs. agent prompts).
 
-**Ships in 12 hours:**
-- Landing page (already built in mockup, port to React)
-- Empty → Loading → Main view flow (needs interaction wiring)
-- 4-panel main view rendering the canonical fixture
-- Refine bar (visually only, no real backend in 12hr)
+**Ships at the deploy (9:30 AM target):**
+- Landing page deployed at https://volteux.com
+- Empty → Loading → Main view flow with real backend pipeline call
+- 4-panel main view rendering the real generated VolteuxProjectDocument
+- Refine bar (calls real backend with the existing document + tweak)
 - Parts checklist with "I have it" toggle
 - Sticky CTA + see-finished-project link
-- Honest Gap card (one example: load cell)
-- Fake Flash flow OR real flash if Kai's WebUSB/Web Serial spike works
+- Honest Gap card with 5 trigger categories (real backend response)
+- **Real Web Serial flash to a physical Arduino Uno**
+- Generic error boundary, browser-not-Chromium fallback, mobile fallback
 
-**Becomes the "what's next" pitch slide:**
-- Real LLM pipeline integration (Kai's track may or may not get there in 12hr)
+**"What's next" pitch slide content:**
 - ESP32, Pi Pico boards (v1.5)
 - Custom complex projects: drones, robotic arms, 3D-printed STL (v2+)
 - Drag-drop wiring editor (v2+)
 - Thousands of supported microcontrollers (v2+)
 
 **Hackathon decisions made:**
-- Build path: **port HTML mockup to React/Vite** (matches planned stack, integrates with Kai's pipeline, handoff-friendly)
-- Deploy: **frontend on Vercel + backend on Vultr** (Vultr fits the planned VPS architecture for arduino-cli; also goes for the MLH "Best Use of Vultr" prize)
+- Build path: **React app at `react-router-app/`** (to be moved into `repo/frontend/` for Vercel auto-deploy)
+- Deploy: **frontend on Vercel** (free, custom domain volteux.com via Cloudflare DNS CNAME) **+ backend on Vultr** (qualifies for the MLH Best Use of Vultr prize, $100 free credit via MLH gift code)
 - Real Arduino flash demo: **yes, Talia has hardware**
 - Demo prompts: 3 selected (robot arm waves / desk lamp on hand-over / parking sensor beeps)
 
