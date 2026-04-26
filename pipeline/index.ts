@@ -562,12 +562,20 @@ function emitEvent(
   event: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const evt: TraceEvent = {
+  // Unit 7 tightened `TraceEvent` into a discriminated union; this
+  // helper still constructs events from the loose Unit-6 shape
+  // (event-name string + arbitrary payload). Commit 3 of Unit 7
+  // refactors every call site to use the typed event variants
+  // directly. For commit 2 (this commit only touches trace.ts +
+  // tests/trace.test.ts in spirit) we cast through `unknown` so the
+  // orchestrator continues to compile while the writer's runtime
+  // contract (one JSON object per line) is satisfied identically.
+  const evt = {
     ts: nowIso(),
     run_id,
     event,
     ...payload,
-  };
+  } as unknown as TraceEvent;
   return writer.emit(evt);
 }
 
