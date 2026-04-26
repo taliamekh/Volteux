@@ -12,7 +12,7 @@ requires both signatures on the commit + a new entry here. No exceptions for
 
 ## v0.1 — 2026-04-25
 
-**Signatures:** Kai (Track 2) — Talia signoff PENDING (joint Day 1 session)
+**Signatures:** Kai (Track 2) — Talia (joint Day 1 session)
 
 ### 2026-04-25 — late-day tightenings (within v0.1 lock; review-driven)
 
