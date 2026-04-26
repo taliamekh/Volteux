@@ -5,7 +5,8 @@
 // Renders the 5 archetype-1 components as drei primitive meshes on a
 // flat workspace plane, with click-to-select hotspots overlaid via
 // `<Html>`. No `.glb` loading: production models are a separate
-// visual-identity work-stream (see plan U3 § Key Technical Decisions).
+// visual-identity work-stream (see
+// docs/plans/2026-04-26-001-feat-v01-ui-track1-completion-plan.md).
 //
 // StrictMode-safe: every resource is owned by drei primitives that
 // handle their own lifecycle. No `useEffect` resource allocation in
@@ -32,10 +33,37 @@ const COLORS = {
   workspace: "#23293B",     // subtle dark plane that blends with --bg
 } as const;
 
+// Per-SKU positions for the 5 archetype-1 parts. SKU is unique per
+// component (icon is not — the Uno and breadboard both map to `board`),
+// so SKU-keyed lookup is the source of truth and the icon-keyed table
+// below is a fallback for components not yet enumerated here.
+// Y is height above the workspace plane (which sits at y=0).
+const POSITIONS_BY_SKU: Readonly<Record<string, [number, number, number]>> = {
+  "50":   [-1.6, 0.1, -0.4],    // Arduino Uno (off-board, to the left)
+  "3942": [-0.6, 0.3, 0.5],     // HC-SR04 sits on the breadboard, left
+  "169":  [1.4, 0.32, 0.2],     // SG90 servo on the right
+  "239":  [0.2, 0.075, 0.0],    // breadboard centered (matches BreadboardSlab pos)
+  "758":  [0.2, 0.05, 0.6],     // jumper wires laid flat on the breadboard
+};
+
+// Rough per-SKU hotspot Y-offset so the `<Html>` floats above the part.
+const HOTSPOT_Y_OFFSET_BY_SKU: Readonly<Record<string, number>> = {
+  "50":   0.35,
+  "3942": 0.55,
+  "169":  0.65,
+  "239":  0.20,
+  "758":  0.15,
+};
+
 // Index-based positions for the 5 archetype-1 parts. Y is height above
 // the workspace plane (which sits at y=0). The plan calls for visual
 // adjustment, not pixel projection from the 2D `pos.x/pos.y` (which are
 // SVG screen percentages).
+//
+// Kept as a fallback for parts whose SKU isn't in `POSITIONS_BY_SKU`
+// (e.g., future archetypes that emit components not yet enumerated
+// above). Two SKUs can share an icon (`board` covers both Uno and
+// breadboard), which is why the SKU-keyed table is preferred.
 const POSITIONS_BY_ICON: Readonly<Record<IconKind, [number, number, number]>> = {
   board: [-1.6, 0.1, -0.4],   // Arduino Uno (off-board, to the left)
   sonar: [-0.6, 0.3, 0.5],    // HC-SR04 sits on the breadboard
@@ -56,6 +84,19 @@ const HOTSPOT_Y_OFFSET_BY_ICON: Readonly<Record<IconKind, number>> = {
   buzzer: 0.45,
   eye: 0.55,
 };
+
+/**
+ * Strip the display-only "SKU " prefix that the parts adapter adds to
+ * `Part.sku` (see `app/src/data/adapter.ts` ~line 254). Pure helper so
+ * the lookup tables can be keyed by raw SKU (matching the registry).
+ *
+ * Cluster B follow-up: the `Part.sku` shape ("SKU 239" vs `{display, id}`)
+ * is a typed-lookup footgun TypeScript can't catch. Mitigated locally
+ * with this helper; structural fix is out of scope for this unit.
+ */
+function skuKey(prefixed: string): string {
+  return prefixed.startsWith("SKU ") ? prefixed.slice(4) : prefixed;
+}
 
 // ---------- Per-part mesh ----------
 
@@ -213,8 +254,17 @@ const HeroScene = forwardRef<HeroSceneHandle, HeroSceneProps>(function HeroScene
         // The breadboard's mesh is rendered as <BreadboardSlab/> above;
         // we still want its hotspot for the click-to-learn workflow.
         const isBreadboard = part.sku === "SKU 239";
-        const pos = POSITIONS_BY_ICON[part.icon] ?? [0, 0.2, 0];
-        const hotspotY = HOTSPOT_Y_OFFSET_BY_ICON[part.icon] ?? 0.5;
+        // Prefer SKU-keyed positions (unique per component); fall back to
+        // icon-keyed (some icons cover multiple SKUs); then a hard default.
+        // The prefix-strip is intentional: the adapter formats `Part.sku`
+        // as a display string ("SKU 239"). Falling back to the icon table
+        // when a SKU is missing here is acceptable because the adapter
+        // throws on truly unknown SKUs at the parts-list boundary
+        // (`pipelineToProject` in `data/adapter.ts`).
+        const sku = skuKey(part.sku);
+        const pos = POSITIONS_BY_SKU[sku] ?? POSITIONS_BY_ICON[part.icon] ?? [0, 0.2, 0];
+        const hotspotY =
+          HOTSPOT_Y_OFFSET_BY_SKU[sku] ?? HOTSPOT_Y_OFFSET_BY_ICON[part.icon] ?? 0.5;
         const isActive = selectedPart === part.id;
 
         return (
