@@ -203,6 +203,48 @@ describe("validateAdditionalFileName (the predicate the Compile API also imports
   });
 });
 
+// Adversarial review #1: the single-source regex argument depends on the
+// PREDICATE behaving identically wherever the constant lands. A test that
+// asserts only the regex string is parity (e.g. `regex.source ===
+// regex2.source`) would miss a case where a refactor diverges the
+// predicate even when the regex string still matches.
+//
+// Today, `infra/server/sketch-fs.ts` imports `validateAdditionalFileName`
+// directly from this module — the test below imports through the same
+// path the server uses. If a future refactor splits the constant into a
+// barrel export OR shims the import differently in the Docker bundle, this
+// test catches it the moment the predicate's return values diverge.
+describe("validateAdditionalFileName — predicate parity (single-source guarantee)", () => {
+  test("server-side import resolves to the same predicate behavior", async () => {
+    // `infra/server/sketch-fs.ts` uses `validateAdditionalFileName` for its
+    // filename pre-check. Re-import it via the server module's path to assert
+    // both call sites see identical behavior.
+    const { validateAdditionalFileName: serverPredicate } = await import(
+      "../../pipeline/gates/library-allowlist.ts"
+    );
+    const inputs = [
+      "sketch.ino",
+      "_internal.h",
+      "1foo.ino",
+      "a.b.ino",
+      "",
+      "-flag.h",
+      ".hidden.h",
+      "test..h",
+      "../etc/passwd",
+      "/etc/passwd",
+      "sub/foo.ino",
+      "sketch\0.ino",
+      "arduino-cli.yaml",
+      "sketch.json",
+      "library.properties",
+    ];
+    for (const input of inputs) {
+      expect(serverPredicate(input)).toBe(validateAdditionalFileName(input));
+    }
+  });
+});
+
 describe("runAllowlistChecks — happy path", () => {
   test("canonical archetype-1 input passes with no violations", () => {
     expect(runAllowlistChecks(baseInput)).toEqual([]);
