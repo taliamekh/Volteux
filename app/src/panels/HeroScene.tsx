@@ -22,11 +22,25 @@
 // drag handlers on HC-SR04 (SKU 3942) and SG90 (SKU 169), and routed
 // every `doc.connections[]` entry into a tube whose endpoints recompute
 // from the live override map. Uno is intentionally non-draggable.
+//
+// KAI-DONE (Unit 8): Camera dolly via @react-spring/three. On selectedPin
+// change, the camera lerps 15% toward the pin's world position over
+// 400ms (easeOutCubic). When selectedPin is null, the camera returns to
+// its origin. OrbitControls is disabled mid-spring to avoid input fight.
 
-import { forwardRef, Suspense, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  Suspense,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import * as THREE from "three";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Box, Cylinder, Html, OrbitControls, Plane, Sphere } from "@react-three/drei";
+import { useSpring, easings } from "@react-spring/three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { ThreeEvent } from "@react-three/fiber";
 import type { IconKind, Part } from "../types";
@@ -501,6 +515,80 @@ function snapTo(v: number, step: number): number {
   return Math.round(v / step) * step;
 }
 
+// ---------- Camera dolly ----------
+
+const CAMERA_ORIGIN = new THREE.Vector3(3, 2.5, 4);
+const DOLLY_LERP_AMOUNT = 0.15; // lerp 15 % toward pin
+const DOLLY_DURATION_MS = 400;
+// Re-enable OrbitControls once the spring is within this much of either end.
+const SPRING_SETTLE_EPSILON = 0.001;
+
+interface CameraDollyProps {
+  /** World-space target the camera should dolly toward. Null = origin. */
+  target: [number, number, number] | null;
+  /** Live ref to OrbitControls so we can pause it mid-transition. */
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+}
+
+/**
+ * Animates the active R3F camera from its current position toward a
+ * point that is 15 % of the way to `target` over 400 ms. When `target`
+ * is null, eases the camera back to CAMERA_ORIGIN. OrbitControls is
+ * disabled while the spring is mid-flight to avoid input fight.
+ *
+ * Must be rendered inside <Canvas/> — uses `useThree` and `useFrame`.
+ */
+function CameraDolly({ target, controlsRef }: CameraDollyProps) {
+  const { camera } = useThree();
+  // The "from" position is captured once per target change so the lerp
+  // basis stays stable through the animation.
+  const fromRef = useRef(camera.position.clone());
+  const toRef = useRef(camera.position.clone());
+
+  // Recompute from/to whenever `target` changes. We snapshot the camera's
+  // current position as the spring start (so rapid pin clicks resume from
+  // wherever the previous transition left off — last click wins).
+  useEffect(() => {
+    fromRef.current.copy(camera.position);
+    if (target) {
+      const targetVec = new THREE.Vector3(target[0], target[1], target[2]);
+      // Lerp 15 % from current toward target so the dolly is a nudge, not a slam.
+      toRef.current
+        .copy(camera.position)
+        .lerp(targetVec, DOLLY_LERP_AMOUNT);
+    } else {
+      toRef.current.copy(CAMERA_ORIGIN);
+    }
+    // camera.position is read imperatively each render — depend on target only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  const [{ t }, api] = useSpring(() => ({
+    t: 0,
+    config: { duration: DOLLY_DURATION_MS, easing: easings.easeOutCubic },
+  }));
+
+  useEffect(() => {
+    // Reset to 0 (start) and animate to 1 (end) on every target change.
+    api.set({ t: 0 });
+    api.start({ t: 1 });
+  }, [target, api]);
+
+  useFrame(() => {
+    const v = t.get();
+    camera.position.lerpVectors(fromRef.current, toRef.current, v);
+    // Pause OrbitControls while mid-transition; re-enable when settled.
+    const controls = controlsRef.current;
+    if (controls) {
+      const settled = v < SPRING_SETTLE_EPSILON || v > 1 - SPRING_SETTLE_EPSILON;
+      if (settled && !controls.enabled) controls.enabled = true;
+      else if (!settled && controls.enabled) controls.enabled = false;
+    }
+  });
+
+  return null;
+}
+
 // ---------- Scene API exposed to HeroPanel ----------
 
 export interface HeroSceneHandle {
@@ -612,6 +700,24 @@ const HeroScene = forwardRef<HeroSceneHandle, HeroSceneProps>(function HeroScene
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, parts, dragOverrides]);
 
+  // Resolve the dolly target — selected pin's world position. Returns null
+  // when nothing is selected so the dolly eases back to camera origin.
+  const dollyTarget = useMemo<[number, number, number] | null>(() => {
+    if (!selectedPin) return null;
+    // Find the Uno's part to anchor pin positions to its world transform.
+    const uno = parts.find((p) => skuKey(p.sku) === "50");
+    if (!uno) return null;
+    const unoPos = resolvePartPosition(uno.id);
+    if (!unoPos) return null;
+    const positions = calculatePinPositions("uno");
+    const pinPos = positions[selectedPin];
+    if (!pinPos) return null;
+    const zSquish = 0.22;
+    return [unoPos[0] + pinPos.x, unoPos[1] + 0.12, unoPos[2] + pinPos.z * zSquish];
+    // resolvePartPosition closes over `parts` and `dragOverrides`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPin, parts, dragOverrides]);
+
   return (
     <Canvas
       camera={{ position: [3, 2.5, 4], fov: 45 }}
@@ -619,6 +725,7 @@ const HeroScene = forwardRef<HeroSceneHandle, HeroSceneProps>(function HeroScene
       flat
       style={{ width: "100%", height: "100%", touchAction: "none" }}
     >
+      <CameraDolly target={dollyTarget} controlsRef={controlsRef} />
       <ambientLight intensity={0.6} />
       <directionalLight position={[5, 5, 5]} intensity={0.8} castShadow />
 

@@ -153,7 +153,10 @@ export default function HeroPanel({
         )}
 
         {selectedPin && (
-          <div className="pin-info-card">
+          <div
+            className="pin-info-card"
+            style={{ fontFamily: '"JetBrains Mono", monospace' }}
+          >
             <button
               className="close-x"
               onClick={() => setSelectedPin(null)}

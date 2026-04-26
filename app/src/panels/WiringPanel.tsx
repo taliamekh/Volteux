@@ -1,4 +1,9 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { Project, WireColor } from "../types";
 import { lookupBySku, type ComponentRegistryEntry } from "../../../components/registry";
 import {
@@ -253,6 +258,35 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
     () => new Map(),
   );
   const dragRef = useRef<DragState | null>(null);
+
+  // Wire reveal animation state. Index of the connection clicked, plus
+  // the resolved total length (queried from the live <path> via
+  // getTotalLength()) and the rendered dashoffset. When the user clicks
+  // a wire, we set length immediately (dashoffset = length, fully hidden)
+  // then on the next frame set dashoffset = 0 to trigger the CSS transition.
+  const [selectedConnection, setSelectedConnection] = useState<number | null>(null);
+  const [revealLength, setRevealLength] = useState<number | null>(null);
+  const [revealOffset, setRevealOffset] = useState<number | null>(null);
+  const pathRefs = useRef<Map<number, SVGPathElement>>(new Map());
+
+  useEffect(() => {
+    if (selectedConnection === null) {
+      setRevealLength(null);
+      setRevealOffset(null);
+      return;
+    }
+    const path = pathRefs.current.get(selectedConnection);
+    if (!path) return;
+    const length = path.getTotalLength();
+    setRevealLength(length);
+    setRevealOffset(length);
+    // Schedule the transition on the next frame so the browser commits
+    // the initial (hidden) state before we change to dashoffset = 0.
+    const raf = window.requestAnimationFrame(() => {
+      setRevealOffset(0);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [selectedConnection]);
 
   const updateOverride = (componentId: string, next: DragOffset): void => {
     setDragOverrides((prev) => {
@@ -556,7 +590,28 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
                 d = routeWire(a, b, busOffset);
               }
 
-              return <path key={i} d={d} stroke={stroke} />;
+              const isSelected = selectedConnection === i;
+              const revealStyle =
+                isSelected && revealLength !== null && revealOffset !== null
+                  ? {
+                      strokeDasharray: revealLength,
+                      strokeDashoffset: revealOffset,
+                      transition: "stroke-dashoffset 500ms ease-out",
+                    }
+                  : undefined;
+              return (
+                <path
+                  key={i}
+                  ref={(el) => {
+                    if (el) pathRefs.current.set(i, el);
+                    else pathRefs.current.delete(i);
+                  }}
+                  d={d}
+                  stroke={stroke}
+                  style={{ cursor: "pointer", ...revealStyle }}
+                  onClick={() => setSelectedConnection(i)}
+                />
+              );
             })}
           </g>
 
@@ -564,7 +619,7 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
           <g
             transform={`translate(${BOARD_LEFT}, 250)`}
             fontSize="8"
-            fontFamily="monospace"
+            fontFamily='"JetBrains Mono", monospace'
             fill={LABEL_FILL}
           >
             {project.wiring.slice(0, 5).map((w, i) => (
