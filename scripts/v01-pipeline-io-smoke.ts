@@ -181,6 +181,7 @@ export type SmokeOutcome =
       latency_ms: number;
     }
   | { kind: "OUT_OF_SCOPE"; archetype_id: string | null; confidence: number }
+  | { kind: "PROMPT_READ_FAILED"; message: string }
   | { kind: "CLASSIFY_FAILED"; failure_kind: ClassifyFailureKind }
   | { kind: "GENERATE_FAILED"; failure_kind: GenerateFailureKind }
   | { kind: "SCHEMA_FAILED" }
@@ -266,6 +267,7 @@ function renderClassifyOutcome(o: SmokeOutcome): string {
   if (o.kind === "OK") return "ok";
   if (o.kind === "OUT_OF_SCOPE") return "skip(out-of-scope)";
   if (o.kind === "CLASSIFY_FAILED") return renderClassifyKind(o.failure_kind);
+  if (o.kind === "PROMPT_READ_FAILED") return "-";
   return "ok"; // classify succeeded; later stage failed.
 }
 
@@ -273,7 +275,13 @@ function renderGenerateOutcome(o: SmokeOutcome): string {
   if (o.kind === "OK") return "ok";
   if (o.kind === "GENERATE_FAILED") return renderGenerateKind(o.failure_kind);
   // Stages before generate didn't run, or stages after report.
-  if (o.kind === "OUT_OF_SCOPE" || o.kind === "CLASSIFY_FAILED") return "-";
+  if (
+    o.kind === "OUT_OF_SCOPE" ||
+    o.kind === "CLASSIFY_FAILED" ||
+    o.kind === "PROMPT_READ_FAILED"
+  ) {
+    return "-";
+  }
   return "ok";
 }
 
@@ -617,9 +625,31 @@ export async function runSmoke(deps: SmokeDeps): Promise<SmokeOutput> {
     const filename = PROMPT_FILES[i] ?? "";
     const promptIndex = i + 1;
     const startedAt = Date.now();
-    const promptText = (await deps.readPromptFile(filename)).trim();
     // Progress lines go to STDERR — stdout stays the structured payload.
     deps.stderr(`[smoke] prompt ${promptIndex}/${PROMPT_FILES.length}: ${filename}\n`);
+
+    // Prompt-file read failures must NOT propagate out of `runSmoke` —
+    // a single missing file should fall through to a captured outcome
+    // so the rest of the loop runs and the trace + hash + JSON payload
+    // still surface. Mirrors the trace-write try/catch below: every
+    // boundary failure surfaces as a structured outcome, not a throw.
+    let promptText: string;
+    try {
+      promptText = (await deps.readPromptFile(filename)).trim();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      deps.stderr(
+        `[smoke] WARN: prompt file read failed for ${filename}: ${msg}\n`,
+      );
+      rows.push({
+        prompt_index: promptIndex,
+        prompt_file: filename,
+        prompt_text: "",
+        outcome: { kind: "PROMPT_READ_FAILED", message: msg },
+        total_latency_ms: Date.now() - startedAt,
+      });
+      continue;
+    }
 
     const outcome = flags.dryRun
       ? dryRunHappyOutcome()

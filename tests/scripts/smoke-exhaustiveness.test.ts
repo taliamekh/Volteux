@@ -156,6 +156,8 @@ function describeOutcome(o: SmokeOutcome): string {
       return `OK(hex=${o.hex_size_bytes})`;
     case "OUT_OF_SCOPE":
       return `OUT_OF_SCOPE(${o.archetype_id ?? "null"}, ${o.confidence})`;
+    case "PROMPT_READ_FAILED":
+      return `PROMPT_READ_FAILED(${o.message})`;
     case "CLASSIFY_FAILED":
       return `CLASSIFY_FAILED(${o.failure_kind})`;
     case "GENERATE_FAILED":
@@ -215,6 +217,9 @@ test("describeOutcome renders every SmokeOutcome variant", () => {
       confidence: 0.95,
     }),
   ).toBe("OUT_OF_SCOPE(null, 0.95)");
+  expect(
+    describeOutcome({ kind: "PROMPT_READ_FAILED", message: "ENOENT: no such file" }),
+  ).toBe("PROMPT_READ_FAILED(ENOENT: no such file)");
   expect(
     describeOutcome({ kind: "CLASSIFY_FAILED", failure_kind: "transport" }),
   ).toBe("CLASSIFY_FAILED(transport)");
