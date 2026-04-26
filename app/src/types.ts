@@ -7,6 +7,7 @@
 // will be replaced by — or derived from — `schemas/document.zod.ts`.
 // Until then this is the contract the UI components rely on.
 
+import { z } from "zod";
 import type { VolteuxProjectDocument } from "../../schemas/document.zod";
 
 export type IconKind =
@@ -119,11 +120,16 @@ export interface Tweaks {
   useAi: boolean;
 }
 
-export interface User {
-  email: string;
-  initials: string;
-  provider: "email" | "google" | "github";
-}
+// User shape persisted to localStorage. Validated via UserSchema.safeParse on
+// load so a tampered or pre-schema-change entry returns null instead of
+// blowing up downstream consumers via a JSON.parse-as-cast.
+export const UserSchema = z.object({
+  email: z.string(),
+  initials: z.string(),
+  provider: z.enum(["email", "google", "github"]),
+});
+
+export type User = z.infer<typeof UserSchema>;
 
 export type ChatMessage =
   | { role: "user"; text: string }

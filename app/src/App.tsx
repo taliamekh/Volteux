@@ -10,7 +10,7 @@ import { applyRefinement, summarizeChange } from "./data/projects";
 import { pipelineToProject } from "./data/adapter";
 import { loadDefaultFixture } from "./data/fixtures";
 import { decode, encode } from "./lib/urlHash";
-import type { Project, Tweaks, User, ViewName } from "./types";
+import { UserSchema, type Project, type Tweaks, type User, type ViewName } from "./types";
 
 const TWEAK_DEFAULTS: Tweaks = {
   palette: "violet",
@@ -23,7 +23,10 @@ const TWEAK_DEFAULTS: Tweaks = {
 function loadUser(): User | null {
   try {
     const raw = localStorage.getItem("volteux_user");
-    return raw ? (JSON.parse(raw) as User) : null;
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    const result = UserSchema.safeParse(parsed);
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
