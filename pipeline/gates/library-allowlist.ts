@@ -78,14 +78,64 @@ const HEADER_TO_LIBRARY: Readonly<Record<string, string>> = {
 
 /**
  * Strict regex for `additional_files` keys. Filename only: alphanumerics,
- * dot, hyphen, underscore. Extension must be one of the four C/C++ source
- * extensions arduino-cli understands. No path separators, no traversal,
- * no leading slash, no empty string.
+ * dot, hyphen, underscore. First character MUST be alphanumeric or
+ * underscore (rejects leading dash and leading dot). Extension MUST be one
+ * of the four C/C++ source extensions arduino-cli understands. No path
+ * separators, no traversal, no leading slash, no empty string.
  *
- * Origin: scope-guardian + security-lens findings F-004; mirrors the same
- * regex used inside the Compile API in Unit 6.
+ * Consecutive dots like `test..h` are rejected by `validateAdditionalFileName`
+ * (a primary check run BEFORE this regex). Do not rely on the regex alone —
+ * `[A-Za-z0-9_.-]*` accepts repeated dots.
+ *
+ * Sandbox bypass surface (arduino-cli #758): `arduino-cli.yaml`, `sketch.json`,
+ * `library.properties`, `hardware/platform.txt` would override the platform
+ * recipe and execute arbitrary commands. Each is rejected implicitly by the
+ * extension allowlist (none ends in `.ino|.h|.cpp|.c`). Do not "simplify" the
+ * extension constraint — it is the load-bearing defense against #758.
+ *
+ * SINGLE SOURCE OF TRUTH. The Compile API (`infra/server/sketch-fs.ts`)
+ * imports this constant + `validateAdditionalFileName`. Defense in depth
+ * comes from running the predicate at TWO sites (cross-consistency gate
+ * before the compile slot, server before invoking arduino-cli), not from
+ * defining it twice. Two literal copies were the bug SEC-002 + ADV-003
+ * demonstrated.
+ *
+ * Origin: scope-guardian + security-lens findings F-004 (initial allowlist);
+ * SEC-002 + ADV-003 hardened the leading-character anchor and consecutive-dot
+ * rejection (this file's predecessor accepted `-flag.h` and `test..h`).
  */
-export const ADDITIONAL_FILE_NAME_REGEX = /^[A-Za-z0-9_.-]+\.(ino|h|cpp|c)$/;
+export const ADDITIONAL_FILE_NAME_REGEX =
+  /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.(ino|h|cpp|c)$/;
+
+/**
+ * Validate an `additional_files` key against the filename allowlist.
+ *
+ * Returns `null` on pass. Returns a human-readable reason string on fail.
+ *
+ * Layered checks (each fails closed):
+ *   1. Empty string                      — shouldn't reach here, but cheap to verify.
+ *   2. Null byte                         — POSIX path string with a NUL is undefined behavior.
+ *   3. Path traversal (`..`)             — primary check (was dead code before SEC-002 / ADV-003 fix;
+ *                                          the old regex accepted `test..h`, so this branch was never
+ *                                          reached). Now runs BEFORE the regex.
+ *   4. Path separator (`/` or `\`)       — disallowed; filenames are flat.
+ *   5. Leading slash                     — absolute paths disallowed.
+ *   6. Regex                             — alphanumeric/underscore-led, allowed extension.
+ *
+ * On regex failure, the reason names the regex source so future contributors
+ * can grep `ADDITIONAL_FILE_NAME_REGEX` and find this site.
+ */
+export function validateAdditionalFileName(name: string): string | null {
+  if (name === "") return "empty filename";
+  if (name.includes("\0")) return "null byte in filename";
+  if (name.includes("..")) return "consecutive dots not allowed (path traversal or extension obfuscation)";
+  if (name.includes("/") || name.includes("\\"))
+    return "path separators not allowed (use a flat filename)";
+  if (name.startsWith("/")) return "absolute path not allowed";
+  if (!ADDITIONAL_FILE_NAME_REGEX.test(name))
+    return `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`;
+  return null;
+}
 
 /**
  * C preprocessor Phase 2: splice logical source lines by deleting every
@@ -204,11 +254,12 @@ export function runAllowlistChecks(
 
   // (1) Filename allowlist for additional_files keys
   for (const filename of Object.keys(input.additional_files)) {
-    if (!ADDITIONAL_FILE_NAME_REGEX.test(filename)) {
+    const reason = validateAdditionalFileName(filename);
+    if (reason !== null) {
       violations.push({
         kind: "filename-allowlist",
         filename,
-        reason: filenameViolationReason(filename),
+        reason,
       });
     }
   }
@@ -276,14 +327,4 @@ export function runAllowlistChecks(
   }
 
   return violations;
-}
-
-function filenameViolationReason(filename: string): string {
-  if (filename === "") return "empty filename";
-  if (filename.includes("\0")) return "null byte in filename";
-  if (filename.startsWith("/")) return "absolute path not allowed";
-  if (filename.includes("..")) return "path traversal not allowed";
-  if (filename.includes("/") || filename.includes("\\"))
-    return "path separators not allowed (use a flat filename)";
-  return `does not match ${ADDITIONAL_FILE_NAME_REGEX.source}`;
 }

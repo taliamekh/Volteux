@@ -4,6 +4,7 @@ import {
   parseIncludes,
   runAllowlistChecks,
   stripComments,
+  validateAdditionalFileName,
   type AllowlistInput,
 } from "../../pipeline/gates/library-allowlist.ts";
 
@@ -65,7 +66,19 @@ describe("parseIncludes", () => {
 });
 
 describe("ADDITIONAL_FILE_NAME_REGEX", () => {
-  const valid = ["sketch.ino", "helper.h", "lib.cpp", "extra.c", "my-file_2.ino"];
+  // The regex enforces: leading [A-Za-z0-9_], then [A-Za-z0-9_.-]*,
+  // then `.` + one of {ino,h,cpp,c}. It does NOT police consecutive dots —
+  // that lives in `validateAdditionalFileName`.
+  const valid = [
+    "sketch.ino",
+    "helper.h",
+    "lib.cpp",
+    "extra.c",
+    "my-file_2.ino",
+    "_internal.h", // leading underscore allowed
+    "1foo.ino", // leading digit allowed
+    "a.b.ino", // single dot in stem (no consecutive) — boundary case for ADV-003
+  ];
   const invalid = [
     "",
     "../etc/passwd",
@@ -78,6 +91,13 @@ describe("ADDITIONAL_FILE_NAME_REGEX", () => {
     "arduino-cli.yaml",
     "hardware/foo.h",
     "platform.txt",
+    // SEC-002: leading-dash filenames could collide with arduino-cli flag parsing
+    "-flag.h",
+    "--no-color.ino",
+    // ADV-003 (regex layer): leading-dot hidden files are now rejected by the regex
+    // (the consecutive-dots case is exercised by validateAdditionalFileName below)
+    ".hidden.h",
+    ".env.ino",
   ];
 
   for (const name of valid) {
@@ -91,6 +111,96 @@ describe("ADDITIONAL_FILE_NAME_REGEX", () => {
       expect(ADDITIONAL_FILE_NAME_REGEX.test(name)).toBe(false);
     });
   }
+});
+
+describe("validateAdditionalFileName (the predicate the Compile API also imports)", () => {
+  test("returns null on a clean filename", () => {
+    expect(validateAdditionalFileName("foo.h")).toBeNull();
+    expect(validateAdditionalFileName("a.b.ino")).toBeNull();
+  });
+
+  test("rejects empty string with a clear reason", () => {
+    expect(validateAdditionalFileName("")).toBe("empty filename");
+  });
+
+  test("rejects null byte (regardless of position)", () => {
+    expect(validateAdditionalFileName("sketch\0.ino")).toBe("null byte in filename");
+  });
+
+  // ADV-003 — consecutive dots: previously dead code in `filenameViolationReason`
+  // because the old regex accepted `test..h`, so the post-regex `..` check was
+  // never reached. Now the `..` check runs as a primary check before the regex.
+  test("rejects consecutive dots — `test..h` (ADV-003)", () => {
+    expect(validateAdditionalFileName("test..h")).toBe(
+      "consecutive dots not allowed (path traversal or extension obfuscation)",
+    );
+  });
+
+  test("rejects consecutive dots — `..hidden.ino` (ADV-003)", () => {
+    expect(validateAdditionalFileName("..hidden.ino")).toBe(
+      "consecutive dots not allowed (path traversal or extension obfuscation)",
+    );
+  });
+
+  test("rejects path traversal `../etc/passwd` (the consecutive-dot check fires first, which is fine)", () => {
+    // The reason message is the consecutive-dot reason; either reason is
+    // acceptable here — the policy is fail-closed and the user-facing
+    // message still names "..". The rejection itself is the contract.
+    expect(validateAdditionalFileName("../etc/passwd")).not.toBeNull();
+  });
+
+  test("rejects path separators with a clear reason", () => {
+    expect(validateAdditionalFileName("sub/foo.ino")).toBe(
+      "path separators not allowed (use a flat filename)",
+    );
+    expect(validateAdditionalFileName("sub\\foo.ino")).toBe(
+      "path separators not allowed (use a flat filename)",
+    );
+  });
+
+  test("rejects absolute path `/etc/passwd` with a path-separator reason (separator check fires first)", () => {
+    // Either reason is acceptable; the rejection itself is the contract.
+    expect(validateAdditionalFileName("/etc/passwd")).not.toBeNull();
+  });
+
+  // SEC-002 — leading-dash filenames could become CLI flag injections if
+  // arduino-cli were ever invoked with shell interpolation.
+  test("rejects leading-dash `-flag.h` (SEC-002)", () => {
+    const reason = validateAdditionalFileName("-flag.h");
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("does not match");
+  });
+
+  test("rejects double-dash `--no-color.ino` (SEC-002)", () => {
+    const reason = validateAdditionalFileName("--no-color.ino");
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("does not match");
+  });
+
+  // Sandbox bypass surface (arduino-cli #758): each is rejected by the
+  // extension check (none ends in .ino|.h|.cpp|.c). These tests document
+  // *why* the extension constraint must not be relaxed.
+  test("rejects sandbox bypass: arduino-cli.yaml (#758)", () => {
+    expect(validateAdditionalFileName("arduino-cli.yaml")).not.toBeNull();
+  });
+
+  test("rejects sandbox bypass: sketch.json (#758)", () => {
+    expect(validateAdditionalFileName("sketch.json")).not.toBeNull();
+  });
+
+  test("rejects sandbox bypass: library.properties (#758)", () => {
+    expect(validateAdditionalFileName("library.properties")).not.toBeNull();
+  });
+
+  test("rejects sandbox bypass: platform.txt (#758)", () => {
+    expect(validateAdditionalFileName("platform.txt")).not.toBeNull();
+  });
+
+  test("returns null for legitimate boundary case `a.b.ino` (single dots in stem)", () => {
+    // Important regression case for the ADV-003 fix: we must reject CONSECUTIVE
+    // dots without rejecting all multi-dot stems.
+    expect(validateAdditionalFileName("a.b.ino")).toBeNull();
+  });
 });
 
 describe("runAllowlistChecks — happy path", () => {
