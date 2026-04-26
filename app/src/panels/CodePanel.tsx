@@ -1,3 +1,4 @@
+import Editor from "@monaco-editor/react";
 import type { Project } from "../types";
 
 interface CodePanelProps {
@@ -8,7 +9,7 @@ interface CodePanelProps {
 }
 
 export default function CodePanel({ project, onCopy, expanded, onExpandToggle }: CodePanelProps) {
-  const lineCount = project.code.length;
+  const lineCount = project.sketchSource.split("\n").length;
   return (
     <div className={`panel flex-grow code-panel ${expanded ? "panel-expanded" : ""}`}>
       <div className="panel-head">
@@ -27,24 +28,25 @@ export default function CodePanel({ project, onCopy, expanded, onExpandToggle }:
         </button>
       </div>
       <div className="sketch-body">
-        {project.code.map((line, i) => (
-          <div className="sketch-line" key={i}>
-            <span className="ln">{line.kind === "blank" ? "" : i + 1}</span>
-            <span className="code">
-              {line.kind === "com" && <span className="com">{line.text}</span>}
-              {line.kind === "raw" &&
-                line.parts.map((p, j) =>
-                  p.k ? (
-                    <span key={j} className={p.k}>
-                      {p.t}
-                    </span>
-                  ) : (
-                    <span key={j}>{p.t}</span>
-                  ),
-                )}
-            </span>
-          </div>
-        ))}
+        <Editor
+          height="100%"
+          defaultLanguage="cpp"
+          theme="vs-dark"
+          value={project.sketchSource}
+          options={{
+            readOnly: true,
+            minimap: { enabled: false },
+            fontSize: 13,
+            fontFamily: "JetBrains Mono, ui-monospace, monospace",
+            lineNumbers: "on",
+            scrollBeyondLastLine: false,
+            padding: { top: 12, bottom: 12 },
+            renderLineHighlight: "none",
+            folding: false,
+            wordWrap: "off",
+            automaticLayout: true,
+          }}
+        />
       </div>
     </div>
   );

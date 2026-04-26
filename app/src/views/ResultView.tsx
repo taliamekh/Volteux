@@ -51,14 +51,7 @@ export default function ResultView({
   };
 
   const copyCode = () => {
-    const code = project.code
-      .map((l) => {
-        if (l.kind === "com") return l.text;
-        if (l.kind === "blank") return "";
-        return l.parts.map((p) => p.t).join("");
-      })
-      .join("\n");
-    navigator.clipboard?.writeText(code);
+    navigator.clipboard?.writeText(project.sketchSource);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
