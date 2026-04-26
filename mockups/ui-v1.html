@@ -1,0 +1,1843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Volteux — UI mockup v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Exo+2:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ---------- design tokens (DARK · slate-blue) ---------- */
+  :root {
+    --bg: #161C2A;            /* slate midnight, blue undertone */
+    --surface: #1E2536;       /* panel surface */
+    --surface-2: #283044;     /* inset / hover surface */
+    --surface-3: #323B53;     /* slightly lighter for emphasis */
+    --ink: #ECEEF5;           /* cool off-white text */
+    --ink-2: #A4ACBE;         /* muted body text */
+    --ink-3: #6E7689;         /* hints, placeholders */
+    --line: #28304A;          /* hairline borders */
+    --line-2: #3A4360;        /* slightly stronger dividers */
+    --accent: #A78BFA;        /* electric violet — complements slate-blue, modern + clean */
+    --accent-soft: rgba(167, 139, 250, 0.14);  /* tint for accent backgrounds */
+    --accent-deep: #8A6FE3;   /* hover / pressed */
+    --success: #5DD3B5;       /* teal-mint — sits between green and cyan, harmonizes with violet */
+    --success-soft: rgba(93, 211, 181, 0.12);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.5), 0 1px 1px rgba(0,0,0,.3);
+    --shadow-md: 0 4px 14px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.3);
+    --shadow-lg: 0 16px 40px rgba(0,0,0,.6), 0 4px 12px rgba(0,0,0,.4);
+    --shadow-glow: 0 0 40px rgba(167, 139, 250, 0.25), 0 0 80px rgba(167, 139, 250, 0.12);
+    --radius: 6px;
+    --radius-lg: 10px;
+
+    /* metallic / futuristic effect tokens */
+    --metal-text: linear-gradient(180deg, #FFFFFF 0%, #E8EAF5 40%, #B8BDD0 100%);
+    --metal-text-violet: linear-gradient(180deg, #F4EEFF 0%, #C9B8FA 50%, #8B6FE3 100%);
+    --metal-surface: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 60%);
+    --metal-border: linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(167,139,250,0.20) 50%, rgba(255,255,255,0.04) 100%);
+    --metal-button: linear-gradient(180deg, #BDA3FF 0%, #A78BFA 50%, #8866E0 100%);
+    --metal-button-hover: linear-gradient(180deg, #CFB8FF 0%, #B79CFC 50%, #9876E8 100%);
+
+    --display: "Exo 2", "Inter", -apple-system, system-ui, sans-serif;
+    --serif: "DM Serif Display", Georgia, serif;  /* reserved for the Volteux wordmark */
+    --sans: "Inter", -apple-system, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* (background texture + scroll-shine experiment removed — revisit "metallic" direction later) */
+
+  /* ---------- view switcher (mockup-only) ---------- */
+  .switcher {
+    position: fixed; top: 12px; right: 12px;
+    z-index: 100;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 4px;
+    display: flex; gap: 2px;
+    box-shadow: var(--shadow-md);
+    font-size: 12px;
+  }
+  .switcher button {
+    border: 0; background: transparent;
+    padding: 6px 10px; border-radius: 4px;
+    cursor: pointer; font-family: var(--sans); font-weight: 500;
+    color: var(--ink-2);
+  }
+  .switcher button.active { background: var(--ink); color: var(--bg); }
+  .switcher .label { padding: 6px 8px 6px 10px; color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+
+  /* ---------- shared layout ---------- */
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+
+  .header {
+    height: 64px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    display: flex; align-items: center;
+    padding: 0 24px; gap: 24px;
+    flex-shrink: 0;
+  }
+  .wordmark {
+    font-family: var(--serif);
+    font-size: 26px; font-weight: 400;
+    letter-spacing: -0.01em;
+    background: var(--metal-text);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .wordmark .dot {
+    background: var(--metal-text-violet);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .header-spacer { flex: 1; }
+
+  .prompt-chip {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 8px 16px 8px 16px;
+    font-size: 13px; color: var(--ink-2);
+    max-width: 540px;
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  .prompt-chip:hover { border-color: var(--accent); }
+  .prompt-chip .quote { color: var(--ink); font-style: italic; }
+  .prompt-chip .edit {
+    color: var(--ink-3); font-size: 11px;
+    border-left: 1px solid var(--line-2); padding-left: 10px;
+  }
+
+  .classification-chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    border-radius: 100px;
+    padding: 6px 14px;
+    font-size: 12px; font-weight: 500;
+    color: var(--accent);
+  }
+  .classification-chip .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* ---------- main grid ---------- */
+  .main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 60% 40%;
+    gap: 0;
+    padding: 16px;
+    overflow: hidden;
+  }
+
+  /* ---------- 3D hero panel ---------- */
+  .hero {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    margin-right: 8px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column;
+  }
+
+  .hero-canvas {
+    flex: 1;
+    background:
+      radial-gradient(ellipse at 35% 20%, #2A3349 0%, #1B2335 55%, #131826 100%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* fake "3D" components — top-down stylized SVG */
+  .hero-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* hotspot dot */
+  .hotspot {
+    position: absolute;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--surface);
+    box-shadow: 0 0 0 1px var(--accent), 0 2px 6px rgba(226,106,44,.35);
+    cursor: pointer;
+    transform: translate(-50%, -50%);
+    transition: transform .2s;
+  }
+  .hotspot:hover { transform: translate(-50%, -50%) scale(1.25); }
+  .hotspot.pulse::after {
+    content: "";
+    position: absolute; inset: -8px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    animation: pulse 2s ease-out infinite;
+  }
+  @keyframes pulse {
+    0%   { transform: scale(.8); opacity: .8; }
+    100% { transform: scale(2); opacity: 0; }
+  }
+
+  /* selected component callout */
+  .callout {
+    position: absolute;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    width: 280px;
+    box-shadow: var(--shadow-lg);
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .callout::before {
+    content: "";
+    position: absolute;
+    top: 24px; left: -8px;
+    width: 0; height: 0;
+    border: 8px solid transparent;
+    border-right-color: var(--surface);
+    filter: drop-shadow(-1px 0 0 var(--line));
+  }
+  .callout .label {
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .callout .name {
+    font-family: var(--display); font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin-bottom: 8px; color: var(--ink);
+  }
+  .callout .blurb { color: var(--ink-2); line-height: 1.5; }
+  .callout .pin-list {
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--ink-3);
+  }
+
+  /* hero corner controls */
+  .hero-controls {
+    position: absolute;
+    bottom: 16px; left: 16px;
+    display: flex; gap: 6px;
+  }
+  .hero-controls button {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--ink-2);
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    font-family: var(--sans);
+  }
+  .hero-controls button:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  .hero-hint {
+    position: absolute;
+    top: 16px; left: 16px;
+    background: var(--ink);
+    color: var(--bg);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 12px;
+    box-shadow: var(--shadow-md);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .hero-hint .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* ---------- right column ---------- */
+  .right {
+    margin-left: 8px;
+    display: grid;
+    grid-template-rows: 45fr 35fr 20fr;
+    gap: 12px;
+    min-height: 0;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .panel-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+  }
+  .panel-head h3 {
+    margin: 0;
+    font-family: var(--display);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    flex: 1;
+  }
+  .panel-head .meta {
+    font-size: 11px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+  .panel-head button {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px; color: var(--ink-2);
+    cursor: pointer; font-family: var(--sans);
+  }
+
+  /* ---------- breadboard panel ---------- */
+  .breadboard-body {
+    flex: 1; padding: 16px;
+    background: #131826;
+    overflow: auto;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .breadboard-svg { width: 100%; max-width: 100%; height: auto; }
+
+  /* ---------- sketch panel ---------- */
+  .sketch-body {
+    flex: 1;
+    background: #11172A;
+    color: #E0E5F0;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    padding: 12px 0;
+    overflow: auto;
+    min-height: 0;
+  }
+  .sketch-line { display: flex; padding: 0 16px; }
+  .sketch-line .ln {
+    color: #4A5266;
+    width: 24px;
+    user-select: none;
+    text-align: right;
+    margin-right: 14px;
+    flex-shrink: 0;
+  }
+  .sketch-line .code { white-space: pre; }
+  .kw { color: #A78BFA; }
+  .fn { color: #93C5FD; }
+  .str { color: #9BC8A0; }
+  .com { color: #5A6680; font-style: italic; }
+  .num { color: #FBB77D; }
+
+  /* ---------- parts list ---------- */
+  .parts-body {
+    flex: 1; padding: 8px 16px;
+    overflow: auto;
+  }
+  .part {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+    transition: opacity .2s;
+  }
+  .part:last-child { border-bottom: 0; }
+  .part-thumb {
+    width: 36px; height: 36px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .part-info { flex: 1; min-width: 0; }
+  .part-name {
+    font-size: 13px; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .part-sku { font-size: 11px; color: var(--ink-3); }
+  .part-price { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .part-qty {
+    font-size: 11px; color: var(--ink-3);
+    background: var(--surface-2);
+    padding: 2px 6px; border-radius: 3px;
+    margin-right: 4px;
+  }
+
+  /* parts checklist */
+  .parts-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 0 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .parts-header .col-owned {
+    width: 18px; flex-shrink: 0;
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--ink-3);
+    font-weight: 600;
+    text-align: left;
+  }
+  .parts-header .col-spacer {
+    flex: 1;
+  }
+
+  .part-check {
+    width: 18px; height: 18px;
+    border: 1.5px solid var(--line-2);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: transparent;
+    font-size: 12px;
+    flex-shrink: 0;
+    padding: 0;
+    transition: all .15s;
+  }
+  .part-check:hover {
+    border-color: var(--accent);
+  }
+  .part.owned .part-check {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg);
+  }
+  .part.owned .part-name,
+  .part.owned .part-sku,
+  .part.owned .part-thumb { opacity: .4; }
+  .part.owned .part-name {
+    text-decoration: line-through;
+  }
+  .part.owned .part-price {
+    text-decoration: line-through;
+    color: var(--ink-3);
+  }
+
+  .parts-foot {
+    border-top: 1px solid var(--line);
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+  }
+  .parts-total {
+    flex: 1;
+    font-size: 13px; color: var(--ink-2);
+  }
+  .parts-total strong {
+    color: var(--ink); font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .btn-cart {
+    background: var(--ink);
+    color: var(--bg);
+    border: 0;
+    padding: 8px 14px;
+    border-radius: var(--radius);
+    font-size: 12px; font-weight: 500;
+    cursor: pointer; font-family: var(--sans);
+  }
+
+  /* ---------- refine bar (proposed: in-place tweaks without restarting) ---------- */
+  .refine-bar {
+    flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+    padding: 10px 24px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .refine-label {
+    font-size: 12px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: .08em;
+    flex-shrink: 0;
+  }
+  .refine-input-wrap {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    display: flex; align-items: center;
+    padding: 4px 4px 4px 16px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .refine-input-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .refine-input-wrap input {
+    flex: 1; border: 0; outline: 0;
+    background: transparent;
+    font-family: var(--sans); font-size: 13px;
+    color: var(--ink);
+    padding: 6px 8px;
+  }
+  .refine-input-wrap input::placeholder { color: var(--ink-3); }
+  .refine-input-wrap button {
+    background: var(--accent);
+    color: white; border: 0;
+    padding: 6px 14px; border-radius: 100px;
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; font-family: var(--sans);
+  }
+  .refine-suggestions {
+    display: flex; gap: 6px; margin-top: 8px;
+    padding: 0 24px 10px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .refine-suggestion {
+    background: transparent;
+    border: 1px solid var(--line-2);
+    color: var(--ink-2);
+    padding: 4px 12px; border-radius: 100px;
+    font-size: 11px; cursor: pointer;
+    font-family: var(--sans);
+  }
+  .refine-suggestion:hover {
+    border-color: var(--accent);
+    color: var(--ink);
+  }
+
+  /* ---------- bottom CTA bar ---------- */
+  .footer-cta {
+    flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+    padding: 12px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .footer-meta {
+    flex: 1;
+    color: var(--ink-3);
+    font-size: 12px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .footer-meta .item { display: flex; align-items: center; gap: 6px; }
+  .footer-meta svg { display: block; }
+  .btn-flash {
+    background: var(--metal-button);
+    color: white;
+    border: 0;
+    padding: 12px 24px;
+    border-radius: var(--radius);
+    font-size: 14px; font-weight: 600;
+    cursor: pointer; font-family: var(--sans);
+    display: flex; align-items: center; gap: 8px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.25) inset,
+      0 -1px 0 rgba(0,0,0,0.2) inset,
+      0 4px 14px rgba(167, 139, 250, 0.4),
+      0 2px 4px rgba(0, 0, 0, 0.25);
+    transition: all .15s;
+  }
+  .btn-flash:hover {
+    background: var(--metal-button-hover);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.3) inset,
+      0 -1px 0 rgba(0,0,0,0.2) inset,
+      0 6px 20px rgba(167, 139, 250, 0.55),
+      0 2px 4px rgba(0, 0, 0, 0.25);
+    transform: translateY(-1px);
+  }
+  .btn-share {
+    background: transparent;
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    cursor: pointer; font-family: var(--sans);
+  }
+
+  /* ---------- empty state / landing view ---------- */
+  .empty {
+    flex: 1;
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+
+  /* hero section */
+  .landing-hero {
+    position: relative;
+    min-height: 82vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 80px 24px 60px;
+    text-align: center;
+    overflow: hidden;
+  }
+  .landing-hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-position: center center;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 35%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 35%, transparent 75%);
+    z-index: 0;
+    pointer-events: none;
+  }
+  .landing-hero::after {
+    content: "";
+    position: absolute;
+    top: -10%; left: 50%;
+    transform: translateX(-50%);
+    width: 1200px; height: 800px;
+    background:
+      radial-gradient(ellipse at center, rgba(167,139,250,0.22) 0%, rgba(167,139,250,0.08) 35%, transparent 70%);
+    z-index: 0;
+    pointer-events: none;
+  }
+  .landing-hero > * { position: relative; z-index: 1; }
+
+  /* floating orbs for depth */
+  .landing-hero .orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.5;
+    z-index: 0;
+    pointer-events: none;
+    animation: orb-drift 14s ease-in-out infinite;
+  }
+  .landing-hero .orb-1 {
+    width: 280px; height: 280px;
+    background: rgba(167, 139, 250, 0.4);
+    top: 10%; left: 8%;
+  }
+  .landing-hero .orb-2 {
+    width: 220px; height: 220px;
+    background: rgba(93, 211, 181, 0.18);
+    bottom: 15%; right: 10%;
+    animation-delay: -7s;
+  }
+  @keyframes orb-drift {
+    0%, 100% { transform: translate(0, 0); }
+    50% { transform: translate(20px, -20px); }
+  }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: 100px;
+    padding: 6px 14px 6px 8px;
+    font-size: 12px; color: var(--ink-2);
+    margin-bottom: 28px;
+    font-weight: 500;
+  }
+  .eyebrow .pill {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    border-radius: 100px;
+    padding: 2px 8px;
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+
+  .landing-tagline {
+    font-family: var(--display);
+    font-size: clamp(60px, 9vw, 108px);
+    font-weight: 600;
+    line-height: 0.98;
+    letter-spacing: -0.035em;
+    background: var(--metal-text);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    margin: 0 0 24px 0;
+    max-width: 940px;
+  }
+  .landing-tagline .accent {
+    background: var(--metal-text-violet);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    font-style: normal;
+    font-weight: 700;
+  }
+  .landing-sub {
+    font-size: 18px; color: var(--ink-2);
+    line-height: 1.55;
+    margin: 0 0 44px 0;
+    max-width: 600px;
+  }
+
+  .empty-input-wrap {
+    width: 100%; max-width: 680px;
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    display: flex; align-items: center;
+    padding: 6px 6px 6px 22px;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .empty-input-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-lg);
+  }
+  .empty-input-wrap input {
+    flex: 1;
+    border: 0; outline: 0;
+    font-size: 16px;
+    font-family: var(--sans);
+    color: var(--ink);
+    background: transparent;
+    padding: 14px 0;
+  }
+  .empty-input-wrap input::placeholder { color: var(--ink-3); }
+  .empty-input-wrap button {
+    background: var(--metal-button);
+    color: white;
+    border: 0;
+    padding: 12px 22px;
+    border-radius: var(--radius);
+    font-size: 14px; font-weight: 600;
+    cursor: pointer; font-family: var(--sans);
+    display: flex; align-items: center; gap: 6px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.25) inset,
+      0 -1px 0 rgba(0,0,0,0.2) inset,
+      0 4px 14px rgba(167, 139, 250, 0.4),
+      0 2px 4px rgba(0, 0, 0, 0.25);
+    transition: all .15s;
+  }
+  .empty-input-wrap button:hover {
+    background: var(--metal-button-hover);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.3) inset,
+      0 -1px 0 rgba(0,0,0,0.2) inset,
+      0 6px 20px rgba(167, 139, 250, 0.55),
+      0 2px 4px rgba(0, 0, 0, 0.25);
+    transform: translateY(-1px);
+  }
+
+  .examples {
+    margin-top: 32px;
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    max-width: 760px;
+  }
+  .example-label {
+    width: 100%;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--ink-3); margin-bottom: 10px;
+    font-weight: 500;
+  }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 9px 18px;
+    font-size: 13px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all .15s;
+    font-family: var(--sans);
+  }
+  .chip:hover {
+    border-color: var(--accent);
+    color: var(--ink);
+    background: var(--accent-soft);
+  }
+
+  /* "see a finished project" link */
+  .see-example {
+    margin-top: 24px;
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--ink-3);
+    text-decoration: none;
+    font-size: 13px;
+    transition: color .15s;
+  }
+  .see-example:hover { color: var(--accent); }
+
+  /* sticky header CTA */
+  .header-cta {
+    background: var(--metal-button);
+    color: white;
+    border: 0;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: var(--sans);
+    display: inline-flex; align-items: center; gap: 6px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.25) inset,
+      0 -1px 0 rgba(0,0,0,0.2) inset,
+      0 4px 12px rgba(167, 139, 250, 0.35);
+    opacity: 0;
+    transform: translateY(-4px);
+    pointer-events: none;
+    transition: opacity .25s, transform .25s;
+    margin-left: 12px;
+  }
+  .header-cta.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .header-cta:hover { background: var(--metal-button-hover); }
+
+  /* generic section */
+  .landing-section {
+    padding: 80px 24px;
+    text-align: center;
+    border-top: 1px solid var(--line);
+  }
+  .section-eyebrow {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--accent); font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .section-title {
+    font-family: var(--display);
+    font-size: 42px; font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    background: var(--metal-text);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    margin: 0 auto 16px;
+    max-width: 720px;
+  }
+  .section-sub {
+    font-size: 15px; color: var(--ink-2);
+    margin: 0 auto 56px;
+    max-width: 560px; line-height: 1.55;
+  }
+
+  /* preview cards (what you get) */
+  .preview-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    max-width: 1200px;
+    margin: 0 auto;
+    text-align: left;
+  }
+  @media (max-width: 980px) {
+    .preview-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  .preview-card {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0) 50%),
+      var(--surface);
+    border: 1px solid transparent;
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    transition: transform .25s, box-shadow .25s;
+    cursor: default;
+    background-clip: padding-box;
+  }
+  .preview-card::before {
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: var(--radius-lg);
+    padding: 1px;
+    background: var(--metal-border);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .preview-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.4), 0 0 24px rgba(167, 139, 250, 0.12);
+  }
+  .preview-card .icon {
+    width: 40px; height: 40px;
+    background: var(--accent-soft);
+    border-radius: var(--radius);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+  .preview-card h3 {
+    font-family: var(--sans);
+    font-size: 15px; font-weight: 600; color: var(--ink);
+    margin: 0 0 8px 0;
+  }
+  .preview-card p {
+    font-size: 13px; color: var(--ink-2);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  /* how it works steps */
+  .steps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+    max-width: 1100px;
+    margin: 0 auto;
+    text-align: left;
+  }
+  @media (max-width: 780px) {
+    .steps-grid { grid-template-columns: 1fr; }
+  }
+  .step-card {
+    padding: 0;
+    position: relative;
+  }
+  .step-card .num {
+    font-family: var(--mono);
+    font-size: 72px;
+    font-weight: 500;
+    line-height: 1;
+    background: var(--metal-text-violet);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    letter-spacing: -0.04em;
+    margin-bottom: 18px;
+    display: block;
+  }
+  .step-card h3 {
+    font-family: var(--display);
+    font-size: 22px; font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    margin: 0 0 10px 0;
+  }
+  .step-card p {
+    font-size: 14px; color: var(--ink-2);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  /* trust strip */
+  .trust-strip {
+    display: flex; justify-content: center; gap: 48px;
+    flex-wrap: wrap;
+    padding: 32px 24px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .trust-item {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--ink-2); font-size: 13px;
+  }
+  .trust-item .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success);
+  }
+
+  /* honest scope strip - what's supported now vs. coming */
+  .scope-strip {
+    display: flex; justify-content: center; align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 24px 22px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: center;
+  }
+  .scope-strip .scope-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+  .scope-strip .scope-divider {
+    color: var(--line-2);
+    margin: 0 4px;
+  }
+
+  /* footer */
+  .landing-footer {
+    padding: 40px 24px 60px;
+    text-align: center;
+    color: var(--ink-3);
+    font-size: 12px;
+  }
+  .landing-footer .wordmark {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 400;
+    margin-bottom: 10px;
+  }
+  .landing-footer .links {
+    display: flex; justify-content: center; gap: 24px;
+    margin-top: 14px;
+    font-size: 12px;
+  }
+  .landing-footer .links a {
+    color: var(--ink-3);
+    text-decoration: none;
+    transition: color .15s;
+  }
+  .landing-footer .links a:hover { color: var(--ink); }
+
+  /* ---------- progress / loading view ---------- */
+  .progress-overlay {
+    flex: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 60px 24px;
+  }
+  .progress-prompt {
+    font-family: var(--display);
+    font-size: 22px;
+    color: var(--ink);
+    margin-bottom: 8px;
+    max-width: 600px; text-align: center;
+    font-style: italic;
+  }
+  .progress-prompt::before, .progress-prompt::after {
+    content: '"';
+    color: var(--ink-3);
+  }
+  .progress-sub {
+    color: var(--ink-3); font-size: 13px; margin-bottom: 48px;
+  }
+  .stepper {
+    display: flex; align-items: center; gap: 0;
+    max-width: 680px;
+  }
+  .step {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+  }
+  .step-icon {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    transition: all .3s;
+    color: var(--ink-3);
+  }
+  .step.complete .step-icon {
+    background: var(--success);
+    border-color: var(--success);
+    color: white;
+  }
+  .step.active .step-icon {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+    animation: gentle-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes gentle-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); }
+    50%      { box-shadow: 0 0 0 8px var(--accent-soft); }
+  }
+  .step-label {
+    font-size: 12px;
+    color: var(--ink-3);
+    max-width: 110px; text-align: center;
+    line-height: 1.3;
+  }
+  .step.complete .step-label { color: var(--ink-2); }
+  .step.active .step-label { color: var(--ink); font-weight: 500; }
+  .step-connector {
+    height: 1px; width: 60px;
+    background: var(--line);
+    margin: 0 -2px;
+    margin-bottom: 32px;
+  }
+  .step-connector.done { background: var(--success); }
+
+  /* ---------- view visibility ---------- */
+  .view { display: none; }
+  .view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  /* ---------- text contrast for white-on-violet buttons (outline + shadow) ---------- */
+  .empty-input-wrap button,
+  .btn-flash,
+  .header-cta {
+    text-shadow:
+      0 1px 1px rgba(0, 0, 0, 0.55),
+      0 0 6px rgba(0, 0, 0, 0.2);
+    -webkit-text-stroke: 0.4px rgba(20, 10, 0, 0.55);
+    paint-order: stroke fill;
+  }
+
+  /* ---------- accessibility: visible focus rings ---------- */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  .chip:focus-visible,
+  .part-check:focus-visible,
+  .hotspot:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  /* refine the input wrap focus (it's already styled via :focus-within) */
+  .empty-input-wrap:focus-within { outline: none; }
+  .refine-input-wrap:focus-within { outline: none; }
+
+  /* ---------- accessibility: respect reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+    .hotspot.pulse::after { display: none; }
+    .step.active .step-icon { animation: none; }
+  }
+
+  /* ---------- responsive breakpoints (per design-system checklist) ---------- */
+  @media (max-width: 1024px) {
+    .main { grid-template-columns: 55% 45%; }
+  }
+  @media (max-width: 768px) {
+    .main { grid-template-columns: 1fr; gap: 12px; }
+    .hero { margin-right: 0; min-height: 50vh; }
+    .right { margin-left: 0; }
+    .header { padding: 0 14px; gap: 12px; }
+    .prompt-chip { max-width: 220px; }
+    .prompt-chip .quote { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .footer-cta { flex-wrap: wrap; padding: 10px 14px; }
+    .landing-section { padding: 56px 18px; }
+    .landing-tagline { font-size: clamp(40px, 9vw, 60px); }
+    .landing-sub { font-size: 16px; }
+    .trust-strip { gap: 18px; flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="switcher">
+  <span class="label">View:</span>
+  <button class="active" data-view="main">Main (success)</button>
+  <button data-view="empty">Empty</button>
+  <button data-view="loading">Loading</button>
+</div>
+
+<div class="app">
+
+  <!-- =========================================================
+       HEADER (shared across states)
+  ========================================================= -->
+  <div class="header">
+    <div class="wordmark">Volteux<span class="dot">.</span></div>
+
+    <div class="header-spacer"></div>
+
+    <div id="prompt-chip" class="prompt-chip" title="Click to change your idea">
+      <span class="quote">a robot arm that waves when something gets close</span>
+      <span class="edit">↻ change idea</span>
+    </div>
+
+    <div class="header-spacer"></div>
+
+    <div class="classification-chip" id="class-chip">
+      <span class="dot"></span>
+      <span>Arduino Uno · 92% match</span>
+    </div>
+
+    <button class="header-cta" id="header-cta" aria-hidden="true">
+      Build it
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+    </button>
+  </div>
+
+  <!-- =========================================================
+       VIEW 1: MAIN (success state)
+  ========================================================= -->
+  <div class="view active" id="view-main">
+    <div class="main">
+
+      <!-- 3D HERO -->
+      <div class="hero">
+        <div class="hero-canvas">
+          <!-- stylized "top-down" representation of the build -->
+          <svg class="hero-svg" viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="boardGrad" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#1E5C8A"/>
+                <stop offset="100%" stop-color="#0F3D5F"/>
+              </linearGradient>
+              <linearGradient id="boardSide" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#0F3D5F"/>
+                <stop offset="100%" stop-color="#0A2940"/>
+              </linearGradient>
+              <linearGradient id="bbGrad" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#FBFAF6"/>
+                <stop offset="100%" stop-color="#E8E2D2"/>
+              </linearGradient>
+              <linearGradient id="servoGrad" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#3A4255"/>
+                <stop offset="100%" stop-color="#1E2230"/>
+              </linearGradient>
+              <radialGradient id="floor" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="rgba(0,0,0,0)"/>
+                <stop offset="100%" stop-color="rgba(0,0,0,0.08)"/>
+              </radialGradient>
+            </defs>
+
+            <!-- soft floor shadow -->
+            <ellipse cx="300" cy="450" rx="240" ry="40" fill="url(#floor)"/>
+
+            <!-- breadboard -->
+            <g transform="translate(110,260)">
+              <rect x="0" y="6" width="380" height="120" rx="6" fill="#A8A095" opacity=".4"/>
+              <rect x="0" y="0" width="380" height="120" rx="6" fill="url(#bbGrad)" stroke="#C7BFB0"/>
+              <!-- center channel -->
+              <rect x="0" y="56" width="380" height="8" fill="#D6CFBF"/>
+              <!-- holes -->
+              <g fill="#9A938A">
+                <!-- top half -->
+                <g>
+                  <circle cx="20" cy="14" r="1.6"/><circle cx="35" cy="14" r="1.6"/><circle cx="50" cy="14" r="1.6"/><circle cx="65" cy="14" r="1.6"/><circle cx="80" cy="14" r="1.6"/><circle cx="95" cy="14" r="1.6"/><circle cx="110" cy="14" r="1.6"/><circle cx="125" cy="14" r="1.6"/><circle cx="140" cy="14" r="1.6"/><circle cx="155" cy="14" r="1.6"/><circle cx="170" cy="14" r="1.6"/><circle cx="185" cy="14" r="1.6"/><circle cx="200" cy="14" r="1.6"/><circle cx="215" cy="14" r="1.6"/><circle cx="230" cy="14" r="1.6"/><circle cx="245" cy="14" r="1.6"/><circle cx="260" cy="14" r="1.6"/><circle cx="275" cy="14" r="1.6"/><circle cx="290" cy="14" r="1.6"/><circle cx="305" cy="14" r="1.6"/><circle cx="320" cy="14" r="1.6"/><circle cx="335" cy="14" r="1.6"/><circle cx="350" cy="14" r="1.6"/><circle cx="365" cy="14" r="1.6"/>
+                </g>
+                <g transform="translate(0,12)"><use href="" /></g>
+              </g>
+              <!-- Repeat hole rows by simple groups -->
+              <g fill="#9A938A">
+                <g transform="translate(0,12)">
+                  <circle cx="20" cy="14" r="1.6"/><circle cx="35" cy="14" r="1.6"/><circle cx="50" cy="14" r="1.6"/><circle cx="65" cy="14" r="1.6"/><circle cx="80" cy="14" r="1.6"/><circle cx="95" cy="14" r="1.6"/><circle cx="110" cy="14" r="1.6"/><circle cx="125" cy="14" r="1.6"/><circle cx="140" cy="14" r="1.6"/><circle cx="155" cy="14" r="1.6"/><circle cx="170" cy="14" r="1.6"/><circle cx="185" cy="14" r="1.6"/><circle cx="200" cy="14" r="1.6"/><circle cx="215" cy="14" r="1.6"/><circle cx="230" cy="14" r="1.6"/><circle cx="245" cy="14" r="1.6"/><circle cx="260" cy="14" r="1.6"/><circle cx="275" cy="14" r="1.6"/><circle cx="290" cy="14" r="1.6"/><circle cx="305" cy="14" r="1.6"/><circle cx="320" cy="14" r="1.6"/><circle cx="335" cy="14" r="1.6"/><circle cx="350" cy="14" r="1.6"/><circle cx="365" cy="14" r="1.6"/>
+                </g>
+                <g transform="translate(0,24)">
+                  <circle cx="20" cy="14" r="1.6"/><circle cx="35" cy="14" r="1.6"/><circle cx="50" cy="14" r="1.6"/><circle cx="65" cy="14" r="1.6"/><circle cx="80" cy="14" r="1.6"/><circle cx="95" cy="14" r="1.6"/><circle cx="110" cy="14" r="1.6"/><circle cx="125" cy="14" r="1.6"/><circle cx="140" cy="14" r="1.6"/><circle cx="155" cy="14" r="1.6"/><circle cx="170" cy="14" r="1.6"/><circle cx="185" cy="14" r="1.6"/><circle cx="200" cy="14" r="1.6"/><circle cx="215" cy="14" r="1.6"/><circle cx="230" cy="14" r="1.6"/><circle cx="245" cy="14" r="1.6"/><circle cx="260" cy="14" r="1.6"/><circle cx="275" cy="14" r="1.6"/><circle cx="290" cy="14" r="1.6"/><circle cx="305" cy="14" r="1.6"/><circle cx="320" cy="14" r="1.6"/><circle cx="335" cy="14" r="1.6"/><circle cx="350" cy="14" r="1.6"/><circle cx="365" cy="14" r="1.6"/>
+                </g>
+                <g transform="translate(0,68)">
+                  <circle cx="20" cy="14" r="1.6"/><circle cx="35" cy="14" r="1.6"/><circle cx="50" cy="14" r="1.6"/><circle cx="65" cy="14" r="1.6"/><circle cx="80" cy="14" r="1.6"/><circle cx="95" cy="14" r="1.6"/><circle cx="110" cy="14" r="1.6"/><circle cx="125" cy="14" r="1.6"/><circle cx="140" cy="14" r="1.6"/><circle cx="155" cy="14" r="1.6"/><circle cx="170" cy="14" r="1.6"/><circle cx="185" cy="14" r="1.6"/><circle cx="200" cy="14" r="1.6"/><circle cx="215" cy="14" r="1.6"/><circle cx="230" cy="14" r="1.6"/><circle cx="245" cy="14" r="1.6"/><circle cx="260" cy="14" r="1.6"/><circle cx="275" cy="14" r="1.6"/><circle cx="290" cy="14" r="1.6"/><circle cx="305" cy="14" r="1.6"/><circle cx="320" cy="14" r="1.6"/><circle cx="335" cy="14" r="1.6"/><circle cx="350" cy="14" r="1.6"/><circle cx="365" cy="14" r="1.6"/>
+                </g>
+                <g transform="translate(0,80)">
+                  <circle cx="20" cy="14" r="1.6"/><circle cx="35" cy="14" r="1.6"/><circle cx="50" cy="14" r="1.6"/><circle cx="65" cy="14" r="1.6"/><circle cx="80" cy="14" r="1.6"/><circle cx="95" cy="14" r="1.6"/><circle cx="110" cy="14" r="1.6"/><circle cx="125" cy="14" r="1.6"/><circle cx="140" cy="14" r="1.6"/><circle cx="155" cy="14" r="1.6"/><circle cx="170" cy="14" r="1.6"/><circle cx="185" cy="14" r="1.6"/><circle cx="200" cy="14" r="1.6"/><circle cx="215" cy="14" r="1.6"/><circle cx="230" cy="14" r="1.6"/><circle cx="245" cy="14" r="1.6"/><circle cx="260" cy="14" r="1.6"/><circle cx="275" cy="14" r="1.6"/><circle cx="290" cy="14" r="1.6"/><circle cx="305" cy="14" r="1.6"/><circle cx="320" cy="14" r="1.6"/><circle cx="335" cy="14" r="1.6"/><circle cx="350" cy="14" r="1.6"/><circle cx="365" cy="14" r="1.6"/>
+                </g>
+                <g transform="translate(0,92)">
+                  <circle cx="20" cy="14" r="1.6"/><circle cx="35" cy="14" r="1.6"/><circle cx="50" cy="14" r="1.6"/><circle cx="65" cy="14" r="1.6"/><circle cx="80" cy="14" r="1.6"/><circle cx="95" cy="14" r="1.6"/><circle cx="110" cy="14" r="1.6"/><circle cx="125" cy="14" r="1.6"/><circle cx="140" cy="14" r="1.6"/><circle cx="155" cy="14" r="1.6"/><circle cx="170" cy="14" r="1.6"/><circle cx="185" cy="14" r="1.6"/><circle cx="200" cy="14" r="1.6"/><circle cx="215" cy="14" r="1.6"/><circle cx="230" cy="14" r="1.6"/><circle cx="245" cy="14" r="1.6"/><circle cx="260" cy="14" r="1.6"/><circle cx="275" cy="14" r="1.6"/><circle cx="290" cy="14" r="1.6"/><circle cx="305" cy="14" r="1.6"/><circle cx="320" cy="14" r="1.6"/><circle cx="335" cy="14" r="1.6"/><circle cx="350" cy="14" r="1.6"/><circle cx="365" cy="14" r="1.6"/>
+                </g>
+              </g>
+            </g>
+
+            <!-- Arduino Uno (left, on the desk) -->
+            <g transform="translate(60,90)">
+              <rect x="6" y="10" width="180" height="120" rx="6" fill="rgba(0,0,0,.15)"/>
+              <rect x="0" y="0" width="180" height="120" rx="6" fill="url(#boardGrad)"/>
+              <rect x="0" y="115" width="180" height="5" fill="url(#boardSide)"/>
+              <!-- USB jack -->
+              <rect x="-12" y="20" width="24" height="34" rx="2" fill="#B8B5AE"/>
+              <rect x="-10" y="22" width="20" height="30" fill="#5C564E"/>
+              <!-- power jack -->
+              <rect x="-8" y="70" width="22" height="22" rx="2" fill="#1A1814"/>
+              <!-- chip -->
+              <rect x="80" y="50" width="42" height="50" rx="2" fill="#1A1814"/>
+              <text x="101" y="80" fill="#5C564E" font-size="9" text-anchor="middle" font-family="monospace">ATmega</text>
+              <!-- pin headers (top - digital) -->
+              <rect x="20" y="6" width="140" height="8" fill="#1A1814"/>
+              <g fill="#C9B27A">
+                <rect x="22" y="8" width="3" height="4"/><rect x="29" y="8" width="3" height="4"/><rect x="36" y="8" width="3" height="4"/><rect x="43" y="8" width="3" height="4"/><rect x="50" y="8" width="3" height="4"/><rect x="57" y="8" width="3" height="4"/><rect x="64" y="8" width="3" height="4"/><rect x="71" y="8" width="3" height="4"/><rect x="78" y="8" width="3" height="4"/><rect x="85" y="8" width="3" height="4"/><rect x="92" y="8" width="3" height="4"/><rect x="99" y="8" width="3" height="4"/><rect x="106" y="8" width="3" height="4"/>
+              </g>
+              <!-- pin headers (bottom - power/analog) -->
+              <rect x="40" y="106" width="120" height="8" fill="#1A1814"/>
+              <g fill="#C9B27A">
+                <rect x="42" y="108" width="3" height="4"/><rect x="49" y="108" width="3" height="4"/><rect x="56" y="108" width="3" height="4"/><rect x="63" y="108" width="3" height="4"/><rect x="70" y="108" width="3" height="4"/><rect x="77" y="108" width="3" height="4"/><rect x="84" y="108" width="3" height="4"/><rect x="91" y="108" width="3" height="4"/>
+              </g>
+              <!-- LEDs -->
+              <circle cx="160" cy="40" r="3" fill="#7AC74F"/>
+              <circle cx="160" cy="50" r="3" fill="#E26A2C"/>
+
+              <text x="90" y="64" fill="#FAF8F4" font-size="9" font-family="serif" font-style="italic" text-anchor="middle" opacity=".75">ARDUINO UNO</text>
+            </g>
+
+            <!-- HC-SR04 ultrasonic on breadboard -->
+            <g transform="translate(180,225)">
+              <rect x="4" y="8" width="120" height="40" rx="3" fill="rgba(0,0,0,.18)"/>
+              <rect x="0" y="0" width="120" height="44" rx="3" fill="#1A4A82"/>
+              <circle cx="32" cy="22" r="16" fill="#A8A095" stroke="#5C564E" stroke-width="1.5"/>
+              <circle cx="32" cy="22" r="11" fill="#3A3530"/>
+              <circle cx="32" cy="22" r="6" fill="#1A1814"/>
+              <text x="32" y="25" fill="#A8A095" font-size="6" text-anchor="middle" font-family="monospace">T</text>
+              <circle cx="88" cy="22" r="16" fill="#A8A095" stroke="#5C564E" stroke-width="1.5"/>
+              <circle cx="88" cy="22" r="11" fill="#3A3530"/>
+              <circle cx="88" cy="22" r="6" fill="#1A1814"/>
+              <text x="88" y="25" fill="#A8A095" font-size="6" text-anchor="middle" font-family="monospace">R</text>
+              <text x="60" y="40" fill="#FAF8F4" font-size="6" text-anchor="middle" font-family="monospace" opacity=".7">HC-SR04</text>
+            </g>
+
+            <!-- Servo (right, on breadboard area) -->
+            <g transform="translate(380,205)">
+              <rect x="6" y="10" width="80" height="64" rx="3" fill="rgba(0,0,0,.18)"/>
+              <rect x="0" y="0" width="80" height="68" rx="3" fill="url(#servoGrad)"/>
+              <!-- horn -->
+              <circle cx="40" cy="20" r="14" fill="#FAF8F4" stroke="#5C564E" stroke-width="1"/>
+              <rect x="38" y="6" width="4" height="28" rx="1" fill="#FAF8F4" stroke="#5C564E" stroke-width=".5"/>
+              <circle cx="40" cy="20" r="3" fill="#5C564E"/>
+              <text x="40" y="55" fill="#E8E2D5" font-size="6" text-anchor="middle" font-family="monospace" opacity=".6">SG90</text>
+              <!-- wire bundle -->
+              <path d="M 0 50 Q -20 60 -25 70" stroke="#E26A2C" stroke-width="1.5" fill="none"/>
+              <path d="M 0 54 Q -16 64 -22 74" stroke="#1A1814" stroke-width="1.5" fill="none"/>
+              <path d="M 0 58 Q -12 68 -18 78" stroke="#C4A876" stroke-width="1.5" fill="none"/>
+            </g>
+
+            <!-- jumper wires (visual hint of connections) -->
+            <g stroke-width="2" fill="none" opacity=".75">
+              <path d="M 175 145 Q 200 200 215 245" stroke="#C8302C"/>
+              <path d="M 175 158 Q 195 215 245 250" stroke="#1A1814"/>
+              <path d="M 175 105 Q 220 160 270 245" stroke="#D9B43C"/>
+              <path d="M 175 118 Q 250 170 300 245" stroke="#3A6FB8"/>
+            </g>
+          </svg>
+
+          <!-- hotspots -->
+          <div class="hotspot" style="top: 32%; left: 22%;" title="Arduino Uno"></div>
+          <div class="hotspot pulse" style="top: 53%; left: 42%;" title="HC-SR04 ultrasonic sensor"></div>
+          <div class="hotspot" style="top: 50%; left: 70%;" title="Servo motor"></div>
+          <div class="hotspot" style="top: 71%; left: 50%;" title="Breadboard"></div>
+
+          <!-- callout (showing as if HC-SR04 is selected) -->
+          <div class="callout" style="top: 42%; left: 50%;">
+            <div class="label">Sensor</div>
+            <div class="name">HC-SR04 ultrasonic sensor</div>
+            <div class="blurb">
+              Sends out a chirp of sound your ears can't hear, then listens for the echo. The Arduino measures how long the round-trip took and turns it into a distance.
+            </div>
+            <div class="pin-list">4 pins · click any pin to learn what it does</div>
+          </div>
+
+          <!-- corner controls -->
+          <div class="hero-controls">
+            <button title="Reset camera">⤾ Reset view</button>
+            <button title="Zoom">＋</button>
+            <button title="Zoom">−</button>
+          </div>
+
+          <div class="hero-hint">
+            <span class="dot"></span>
+            <span>Click any part to learn what it does</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="right">
+
+        <!-- BREADBOARD PANEL -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Wiring diagram</h3>
+            <span class="meta">Top-down · color-coded</span>
+            <button>↗</button>
+          </div>
+          <div class="breadboard-body">
+            <svg class="breadboard-svg" viewBox="0 0 480 220" xmlns="http://www.w3.org/2000/svg">
+              <!-- breadboard background -->
+              <rect x="20" y="40" width="440" height="140" rx="8" fill="#FBFAF6" stroke="#C7BFB0" stroke-width="1"/>
+
+              <!-- column numbers -->
+              <g fill="#9A938A" font-size="7" font-family="monospace" text-anchor="middle">
+                <text x="50" y="35">1</text><text x="80" y="35">5</text><text x="110" y="35">10</text>
+                <text x="140" y="35">15</text><text x="170" y="35">20</text><text x="200" y="35">25</text>
+                <text x="230" y="35">30</text>
+              </g>
+              <!-- row letters -->
+              <g fill="#9A938A" font-size="8" font-family="monospace">
+                <text x="10" y="60">a</text><text x="10" y="74">b</text><text x="10" y="88">c</text>
+                <text x="10" y="102">d</text><text x="10" y="116">e</text>
+                <text x="10" y="138">f</text><text x="10" y="152">g</text><text x="10" y="166">h</text>
+              </g>
+
+              <!-- center channel -->
+              <rect x="20" y="118" width="440" height="6" fill="#E5DFD3"/>
+
+              <!-- holes (sparse representation) -->
+              <g fill="#9A938A">
+                <!-- top half -->
+                <g>
+                  <circle cx="50" cy="60" r="1.4"/><circle cx="65" cy="60" r="1.4"/><circle cx="80" cy="60" r="1.4"/><circle cx="95" cy="60" r="1.4"/><circle cx="110" cy="60" r="1.4"/><circle cx="125" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="155" cy="60" r="1.4"/><circle cx="170" cy="60" r="1.4"/><circle cx="185" cy="60" r="1.4"/><circle cx="200" cy="60" r="1.4"/><circle cx="215" cy="60" r="1.4"/><circle cx="230" cy="60" r="1.4"/>
+                </g>
+                <g transform="translate(0,14)">
+                  <circle cx="50" cy="60" r="1.4"/><circle cx="65" cy="60" r="1.4"/><circle cx="80" cy="60" r="1.4"/><circle cx="95" cy="60" r="1.4"/><circle cx="110" cy="60" r="1.4"/><circle cx="125" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="155" cy="60" r="1.4"/><circle cx="170" cy="60" r="1.4"/><circle cx="185" cy="60" r="1.4"/><circle cx="200" cy="60" r="1.4"/><circle cx="215" cy="60" r="1.4"/><circle cx="230" cy="60" r="1.4"/>
+                </g>
+                <g transform="translate(0,28)">
+                  <circle cx="50" cy="60" r="1.4"/><circle cx="65" cy="60" r="1.4"/><circle cx="80" cy="60" r="1.4"/><circle cx="95" cy="60" r="1.4"/><circle cx="110" cy="60" r="1.4"/><circle cx="125" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="155" cy="60" r="1.4"/><circle cx="170" cy="60" r="1.4"/><circle cx="185" cy="60" r="1.4"/><circle cx="200" cy="60" r="1.4"/><circle cx="215" cy="60" r="1.4"/><circle cx="230" cy="60" r="1.4"/>
+                </g>
+                <g transform="translate(0,42)">
+                  <circle cx="50" cy="60" r="1.4"/><circle cx="65" cy="60" r="1.4"/><circle cx="80" cy="60" r="1.4"/><circle cx="95" cy="60" r="1.4"/><circle cx="110" cy="60" r="1.4"/><circle cx="125" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="155" cy="60" r="1.4"/><circle cx="170" cy="60" r="1.4"/><circle cx="185" cy="60" r="1.4"/><circle cx="200" cy="60" r="1.4"/><circle cx="215" cy="60" r="1.4"/><circle cx="230" cy="60" r="1.4"/>
+                </g>
+                <!-- bottom half -->
+                <g transform="translate(0,78)">
+                  <circle cx="50" cy="60" r="1.4"/><circle cx="65" cy="60" r="1.4"/><circle cx="80" cy="60" r="1.4"/><circle cx="95" cy="60" r="1.4"/><circle cx="110" cy="60" r="1.4"/><circle cx="125" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="155" cy="60" r="1.4"/><circle cx="170" cy="60" r="1.4"/><circle cx="185" cy="60" r="1.4"/><circle cx="200" cy="60" r="1.4"/><circle cx="215" cy="60" r="1.4"/><circle cx="230" cy="60" r="1.4"/>
+                </g>
+                <g transform="translate(0,92)">
+                  <circle cx="50" cy="60" r="1.4"/><circle cx="65" cy="60" r="1.4"/><circle cx="80" cy="60" r="1.4"/><circle cx="95" cy="60" r="1.4"/><circle cx="110" cy="60" r="1.4"/><circle cx="125" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="155" cy="60" r="1.4"/><circle cx="170" cy="60" r="1.4"/><circle cx="185" cy="60" r="1.4"/><circle cx="200" cy="60" r="1.4"/><circle cx="215" cy="60" r="1.4"/><circle cx="230" cy="60" r="1.4"/>
+                </g>
+              </g>
+
+              <!-- ultrasonic sensor on breadboard -->
+              <g transform="translate(110,55)">
+                <rect x="0" y="0" width="80" height="48" rx="2" fill="#1A4A82" stroke="#0A2940"/>
+                <circle cx="20" cy="22" r="10" fill="#A8A095"/>
+                <circle cx="20" cy="22" r="6" fill="#3A3530"/>
+                <circle cx="60" cy="22" r="10" fill="#A8A095"/>
+                <circle cx="60" cy="22" r="6" fill="#3A3530"/>
+                <text x="40" y="42" fill="#FBFAF6" font-size="5" text-anchor="middle" font-family="monospace">HC-SR04</text>
+              </g>
+
+              <!-- Servo (small block representation, off the breadboard) -->
+              <g transform="translate(280,50)">
+                <rect x="0" y="0" width="44" height="36" rx="2" fill="#3A4255"/>
+                <circle cx="22" cy="14" r="8" fill="#FBFAF6"/>
+                <text x="22" y="32" fill="#E8E2D5" font-size="5" text-anchor="middle" font-family="monospace">SG90</text>
+              </g>
+
+              <!-- wires -->
+              <g stroke-width="2" fill="none">
+                <!-- VCC red -->
+                <path d="M 130 55 Q 130 30 280 30 Q 280 50 280 50" stroke="#C8302C" stroke-linecap="round"/>
+                <!-- GND black -->
+                <path d="M 145 55 Q 145 25 295 25 Q 295 50 295 50" stroke="#1A1814" stroke-linecap="round"/>
+                <!-- TRIG yellow -->
+                <path d="M 160 55 Q 160 35 195 35 Q 195 130 230 160" stroke="#D9B43C" stroke-linecap="round"/>
+                <!-- ECHO blue -->
+                <path d="M 175 55 Q 175 40 210 40 Q 210 145 245 170" stroke="#3A6FB8" stroke-linecap="round"/>
+                <!-- servo signal -->
+                <path d="M 280 70 Q 250 90 200 130 Q 180 145 165 165" stroke="#5DA34A" stroke-linecap="round"/>
+              </g>
+
+              <!-- legend -->
+              <g transform="translate(20,200)" font-size="8" font-family="monospace" fill="#5C564E">
+                <circle cx="6" cy="0" r="3" fill="#C8302C"/><text x="14" y="3">5V</text>
+                <circle cx="46" cy="0" r="3" fill="#1A1814"/><text x="54" y="3">GND</text>
+                <circle cx="92" cy="0" r="3" fill="#D9B43C"/><text x="100" y="3">Trig (D7)</text>
+                <circle cx="158" cy="0" r="3" fill="#3A6FB8"/><text x="166" y="3">Echo (D8)</text>
+                <circle cx="232" cy="0" r="3" fill="#5DA34A"/><text x="240" y="3">Signal (D9)</text>
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <!-- SKETCH PANEL -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Code</h3>
+            <span class="meta">42 lines · Servo library</span>
+            <button>copy</button>
+          </div>
+          <div class="sketch-body">
+            <div class="sketch-line"><span class="ln">1</span><span class="code"><span class="com">// Wave when something gets close</span></span></div>
+            <div class="sketch-line"><span class="ln">2</span><span class="code"><span class="kw">#include</span> <span class="str">&lt;Servo.h&gt;</span></span></div>
+            <div class="sketch-line"><span class="ln">3</span><span class="code"></span></div>
+            <div class="sketch-line"><span class="ln">4</span><span class="code">Servo arm;</span></div>
+            <div class="sketch-line"><span class="ln">5</span><span class="code"><span class="kw">const int</span> trigPin = <span class="num">7</span>;</span></div>
+            <div class="sketch-line"><span class="ln">6</span><span class="code"><span class="kw">const int</span> echoPin = <span class="num">8</span>;</span></div>
+            <div class="sketch-line"><span class="ln">7</span><span class="code"><span class="kw">const int</span> servoPin = <span class="num">9</span>;</span></div>
+            <div class="sketch-line"><span class="ln">8</span><span class="code"></span></div>
+            <div class="sketch-line"><span class="ln">9</span><span class="code"><span class="kw">void</span> <span class="fn">setup</span>() {</span></div>
+            <div class="sketch-line"><span class="ln">10</span><span class="code">  <span class="fn">pinMode</span>(trigPin, OUTPUT);</span></div>
+            <div class="sketch-line"><span class="ln">11</span><span class="code">  <span class="fn">pinMode</span>(echoPin, INPUT);</span></div>
+            <div class="sketch-line"><span class="ln">12</span><span class="code">  arm.<span class="fn">attach</span>(servoPin);</span></div>
+            <div class="sketch-line"><span class="ln">13</span><span class="code">}</span></div>
+            <div class="sketch-line"><span class="ln">14</span><span class="code"></span></div>
+            <div class="sketch-line"><span class="ln">15</span><span class="code"><span class="kw">void</span> <span class="fn">loop</span>() {</span></div>
+            <div class="sketch-line"><span class="ln">16</span><span class="code">  <span class="kw">long</span> distance = <span class="fn">measureDistance</span>();</span></div>
+            <div class="sketch-line"><span class="ln">17</span><span class="code">  <span class="kw">if</span> (distance &lt; <span class="num">25</span>) {</span></div>
+            <div class="sketch-line"><span class="ln">18</span><span class="code">    arm.<span class="fn">write</span>(<span class="num">160</span>);</span></div>
+            <div class="sketch-line"><span class="ln">19</span><span class="code">    <span class="fn">delay</span>(<span class="num">300</span>);</span></div>
+            <div class="sketch-line"><span class="ln">20</span><span class="code">    arm.<span class="fn">write</span>(<span class="num">20</span>);</span></div>
+            <div class="sketch-line"><span class="ln">21</span><span class="code">    <span class="fn">delay</span>(<span class="num">300</span>);</span></div>
+            <div class="sketch-line"><span class="ln">22</span><span class="code">  }</span></div>
+            <div class="sketch-line"><span class="ln">23</span><span class="code">}</span></div>
+          </div>
+        </div>
+
+        <!-- PARTS LIST PANEL -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>What you'll need</h3>
+            <span class="meta">3 parts</span>
+          </div>
+          <div class="parts-body">
+            <div class="parts-header">
+              <span class="col-owned">Owned</span>
+              <span class="col-spacer"></span>
+            </div>
+            <div class="part" data-price="27.50">
+              <button class="part-check" title="Check if you already have this"><span>✓</span></button>
+              <div class="part-thumb" title="Arduino Uno R3">🔧</div>
+              <div class="part-info">
+                <div class="part-name">Arduino Uno R3</div>
+                <div class="part-sku">SKU 50</div>
+              </div>
+              <span class="part-qty">×1</span>
+              <span class="part-price">$27.50</span>
+            </div>
+            <div class="part" data-price="3.95">
+              <button class="part-check" title="Check if you already have this"><span>✓</span></button>
+              <div class="part-thumb" title="HC-SR04">📡</div>
+              <div class="part-info">
+                <div class="part-name">HC-SR04 ultrasonic sensor</div>
+                <div class="part-sku">SKU 3942</div>
+              </div>
+              <span class="part-qty">×1</span>
+              <span class="part-price">$3.95</span>
+            </div>
+            <div class="part" data-price="5.95">
+              <button class="part-check" title="Check if you already have this"><span>✓</span></button>
+              <div class="part-thumb" title="Servo">⚙️</div>
+              <div class="part-info">
+                <div class="part-name">Micro servo SG90</div>
+                <div class="part-sku">SKU 169</div>
+              </div>
+              <span class="part-qty">×1</span>
+              <span class="part-price">$5.95</span>
+            </div>
+          </div>
+          <div class="parts-foot">
+            <div class="parts-total">Buying <span id="parts-count">3 of 3</span> · <strong id="parts-total">$37.40</strong></div>
+            <button class="btn-cart">Buy on Adafruit →</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- REFINE BAR (in-place tweaks — see "what changed in this version" callout) -->
+    <div class="refine-bar">
+      <span class="refine-label">Tweak it</span>
+      <div class="refine-input-wrap">
+        <input type="text" placeholder="e.g. make the wave slower, or trigger when something is closer than 10cm" />
+        <button>Update →</button>
+      </div>
+    </div>
+    <div class="refine-suggestions">
+      <button class="refine-suggestion">make it wave 3 times</button>
+      <button class="refine-suggestion">trigger only when really close</button>
+      <button class="refine-suggestion">add a beep when it triggers</button>
+    </div>
+
+    <!-- BOTTOM CTA -->
+    <div class="footer-cta">
+      <div class="footer-meta">
+        <span class="item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+          Compiled (3.2 KB)
+        </span>
+        <span class="item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+          Wiring checked
+        </span>
+      </div>
+      <button class="btn-share">Share</button>
+      <button class="btn-flash">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Flash to my Uno
+      </button>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       VIEW 2: LANDING (empty state)
+  ========================================================= -->
+  <div class="view" id="view-empty">
+    <div class="empty">
+
+      <!-- HERO -->
+      <section class="landing-hero">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="eyebrow">
+          <span class="pill">v0 · beta</span>
+          <span>AI builds the hardware project you describe</span>
+        </div>
+
+        <h1 class="landing-tagline">
+          Build the <span class="accent">thing.</span>
+        </h1>
+
+        <p class="landing-sub">
+          Describe what you want to make. We'll pick the parts, write the code, and teach you what every piece does — so when your hardware arrives you already know it.
+        </p>
+
+        <div class="empty-input-wrap">
+          <input type="text" placeholder="e.g. a robot arm that waves when something gets close..." />
+          <button>
+            Build it
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </button>
+        </div>
+
+        <div class="examples">
+          <span class="example-label">Or try one of these</span>
+          <button class="chip">a robot arm that waves when something gets close</button>
+          <button class="chip">a gate that opens when I walk up to it</button>
+          <button class="chip">a desk lamp that turns on when my hand is over it</button>
+        </div>
+
+        <a href="#" class="see-example" id="see-example">
+          <span>or — see a finished project first</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+        </a>
+      </section>
+
+      <!-- TRUST STRIP -->
+      <div class="trust-strip">
+        <div class="trust-item"><span class="dot"></span> Built for absolute beginners</div>
+        <div class="trust-item"><span class="dot"></span> Real code you can trust, fully commented</div>
+        <div class="trust-item"><span class="dot"></span> Flash to your board in one click</div>
+      </div>
+
+      <!-- HONEST SCOPE STRIP -->
+      <div class="scope-strip">
+        <span class="scope-label">Today</span>
+        <span>Arduino Uno</span>
+        <span class="scope-divider">·</span>
+        <span class="scope-label">Coming soon</span>
+        <span>ESP32 · Pi Pico · custom maker projects · 3D-printed parts · drones · robotics</span>
+      </div>
+
+      <!-- WHAT YOU GET -->
+      <section class="landing-section">
+        <div class="section-eyebrow">What you'll see</div>
+        <h2 class="section-title">Four views of your project, generated in seconds</h2>
+        <p class="section-sub">Every Volteux project gives you the same four panels — so you understand what you're building from every angle, not just the code.</p>
+
+        <div class="preview-grid">
+          <div class="preview-card">
+            <div class="icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+            </div>
+            <h3>3D component view</h3>
+            <p>An interactive scene of every part. Click a component to learn what it is and what it does.</p>
+          </div>
+          <div class="preview-card">
+            <div class="icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 6v12M11 6v12M15 6v12"/></svg>
+            </div>
+            <h3>Wiring diagram</h3>
+            <p>A clean, color-coded breadboard layout you can copy when your real parts arrive.</p>
+          </div>
+          <div class="preview-card">
+            <div class="icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            </div>
+            <h3>Arduino sketch</h3>
+            <p>The full C++ code with beginner-friendly comments explaining what every section does.</p>
+          </div>
+          <div class="preview-card">
+            <div class="icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+            </div>
+            <h3>Parts to buy</h3>
+            <p>An Adafruit cart pre-filled with exactly what you need. Already own something? Just check it off.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- HOW IT WORKS -->
+      <section class="landing-section">
+        <div class="section-eyebrow">How it works</div>
+        <h2 class="section-title">From idea to flashed Arduino in three steps</h2>
+        <p class="section-sub">No prior electronics experience required. Volteux is built for the person who just opened their first kit.</p>
+
+        <div class="steps-grid">
+          <div class="step-card">
+            <span class="num">01</span>
+            <h3>Tell us your idea</h3>
+            <p>Type what you want to build in plain English. "A light that turns on when my hand is over it." Anything that fits an Arduino starter kit project.</p>
+          </div>
+          <div class="step-card">
+            <span class="num">02</span>
+            <h3>We design it in 15 seconds</h3>
+            <p>Volteux picks the right parts, writes your code, lays out the wiring, and renders an interactive 3D view of the whole build.</p>
+          </div>
+          <div class="step-card">
+            <span class="num">03</span>
+            <h3>Buy parts. Flash. Done.</h3>
+            <p>One click sends a pre-filled cart to your parts supplier. When your hardware arrives, plug in your board and click "Flash" — your code is on it in seconds.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- FOOTER -->
+      <footer class="landing-footer">
+        <div class="wordmark">Volteux<span class="dot">.</span></div>
+        <div>v0 · for absolute beginners · made by Talia &amp; Kai</div>
+        <div class="links">
+          <a href="#">GitHub</a>
+          <a href="#">How it works</a>
+          <a href="#">Adafruit kit</a>
+        </div>
+      </footer>
+
+    </div>
+  </div>
+
+  <!-- =========================================================
+       VIEW 3: LOADING / PROGRESS
+  ========================================================= -->
+  <div class="view" id="view-loading">
+    <div class="progress-overlay">
+      <div class="progress-prompt">a robot arm that waves when something gets close</div>
+      <div class="progress-sub">This usually takes about 15 seconds.</div>
+
+      <div class="stepper">
+        <div class="step complete">
+          <div class="step-icon">✓</div>
+          <div class="step-label">Reading your idea</div>
+        </div>
+        <div class="step-connector done"></div>
+        <div class="step complete">
+          <div class="step-icon">✓</div>
+          <div class="step-label">Picking the parts</div>
+        </div>
+        <div class="step-connector done"></div>
+        <div class="step active">
+          <div class="step-icon">✎</div>
+          <div class="step-label">Writing your sketch</div>
+        </div>
+        <div class="step-connector"></div>
+        <div class="step">
+          <div class="step-icon">⚙</div>
+          <div class="step-label">Compiling for Arduino</div>
+        </div>
+        <div class="step-connector"></div>
+        <div class="step">
+          <div class="step-icon">⎘</div>
+          <div class="step-label">Checking the wiring</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // simple view switcher
+  function setView(view) {
+    document.querySelectorAll('.switcher button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById('view-' + view).classList.add('active');
+
+    const promptChip = document.getElementById('prompt-chip');
+    const classChip = document.getElementById('class-chip');
+    const headerCta = document.getElementById('header-cta');
+    if (view === 'empty') {
+      promptChip.style.visibility = 'hidden';
+      classChip.style.visibility = 'hidden';
+      // header CTA visibility handled by scroll observer
+    } else if (view === 'loading') {
+      promptChip.style.visibility = 'visible';
+      classChip.style.visibility = 'hidden';
+      headerCta.classList.remove('visible');
+    } else {
+      promptChip.style.visibility = 'visible';
+      classChip.style.visibility = 'visible';
+      headerCta.classList.remove('visible');
+    }
+  }
+  document.querySelectorAll('.switcher button').forEach(btn => {
+    btn.addEventListener('click', () => setView(btn.dataset.view));
+  });
+
+  // sticky header CTA: appears when hero input scrolls out of view
+  const heroInput = document.querySelector('#view-empty .empty-input-wrap');
+  const headerCta = document.getElementById('header-cta');
+  const emptyScroll = document.querySelector('#view-empty .empty');
+  if (heroInput && headerCta && emptyScroll && 'IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const onLanding = document.getElementById('view-empty').classList.contains('active');
+      entries.forEach(entry => {
+        if (onLanding && !entry.isIntersecting) {
+          headerCta.classList.add('visible');
+        } else {
+          headerCta.classList.remove('visible');
+        }
+      });
+    }, { root: emptyScroll, threshold: 0, rootMargin: '0px 0px 0px 0px' });
+    observer.observe(heroInput);
+  }
+  // sticky CTA click: scroll back to hero input and focus it
+  headerCta?.addEventListener('click', () => {
+    emptyScroll?.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => heroInput?.querySelector('input')?.focus(), 500);
+  });
+
+  // "see a finished project" link → jump to main view
+  document.getElementById('see-example')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setView('main');
+  });
+
+  // (shine-on-scroll experiment removed — revisit "metallic" direction later)
+
+  // "I already have it" toggle on parts list
+  function updatePartsTotal() {
+    const parts = document.querySelectorAll('.part');
+    let total = 0, buying = 0, all = parts.length;
+    parts.forEach(p => {
+      if (!p.classList.contains('owned')) {
+        total += parseFloat(p.dataset.price);
+        buying++;
+      }
+    });
+    document.getElementById('parts-count').textContent = `${buying} of ${all}`;
+    document.getElementById('parts-total').textContent = `$${total.toFixed(2)}`;
+    const cartBtn = document.querySelector('.btn-cart');
+    if (buying === 0) {
+      cartBtn.textContent = 'You have everything ✓';
+      cartBtn.disabled = true;
+      cartBtn.style.opacity = .5;
+      cartBtn.style.cursor = 'default';
+    } else {
+      cartBtn.textContent = 'Buy on Adafruit →';
+      cartBtn.disabled = false;
+      cartBtn.style.opacity = 1;
+      cartBtn.style.cursor = 'pointer';
+    }
+  }
+  document.querySelectorAll('.part-check').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const part = btn.closest('.part');
+      part.classList.toggle('owned');
+      updatePartsTotal();
+    });
+  });
+</script>
+</body>
+</html>
