@@ -2,7 +2,13 @@
 /**
  * v0.1-pipeline-io smoke wiring script — Unit 5 integration proof.
  *
- *   bun run smoke
+ *   bun run smoke              # default: ASCII table + sha256, real API calls
+ *   bun run smoke --json       # JSON output to stdout (rows + hash) instead of table
+ *   bun run smoke --dry-run    # skip Anthropic + compile calls; emit canonical happy-path
+ *                              #   outcomes for each prompt (useful for testing
+ *                              #   pre-flight + output formatting without burning ~$0.27)
+ *
+ * Flags compose: `--json --dry-run` works.
  *
  * Runs 5 hand-written archetype-1 prompts SEQUENTIALLY through the full
  * v0.1 pipeline:
@@ -11,10 +17,18 @@
  *     → runCrossConsistencyGate(doc) → runRules(doc)
  *     → runCompileGate({ fqbn, sketch_main_ino, additional_files, libraries })
  *
- * Prints a per-prompt outcome table to stdout, computes
+ * Prints a per-prompt outcome table (or JSON) to stdout, computes
  * `sha256(JSON.stringify(table))` as the wiring-proof digest, and writes
- * the raw table to `traces/smoke-<run-id>.txt` (gitignored). Exits 0 if
- * ≥3/5 rows are OK; exit 1 otherwise.
+ * the raw table to `traces/smoke-<run-id>.txt` (gitignored).
+ *
+ * **Stream discipline (agent-readability).** Stdout carries ONLY the
+ * payload (table-or-JSON + the trailing hash line, or JSON-mode bytes).
+ * Stderr carries every progress line, the trace path, and pre-flight
+ * error messages. After writing the trace, the script emits a single
+ * deterministic `TRACE_PATH=<path>` line on stderr — agents grepping
+ * stderr for that prefix get a stable extraction path. Trace-write
+ * failures are caught (logged on stderr) so a missing `traces/` write
+ * permission does not crash the run.
  *
  * **Pre-flight discipline (the "fail informatively, not silently" mirror).**
  * Two pre-flight checks run BEFORE any Anthropic call so a missing local
@@ -73,9 +87,12 @@
  * `process.env`. Every line printed is a structured outcome or a
  * pre-flight error message — no debug dumps.
  *
- * Exit codes:
+ * Exit codes (distinct so agents can disambiguate without parsing logs):
  *   0 — ≥3/5 OK rows (the wiring proof passes)
- *   1 — pre-flight failed OR <3/5 OK rows (something is wired wrong)
+ *   1 — pre-flight failed (Compile API down, missing API key); the run
+ *       never started its per-prompt loop
+ *   2 — run completed but fewer than 3/5 OK rows (something is wired wrong
+ *       inside the pipeline, not at its boundaries)
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -116,6 +133,11 @@ const PASS_THRESHOLD = 3; // ≥3/5 OK rows for exit 0
 const SMOKE_PROMPTS_DIR = "scripts/smoke-prompts";
 const TRACES_DIR = "traces";
 
+// Distinct exit codes — `runSmoke` returns these in `SmokeOutput.exitCode`.
+const EXIT_OK = 0;
+const EXIT_PREFLIGHT_FAILED = 1;
+const EXIT_BELOW_THRESHOLD = 2;
+
 const PROMPT_FILES: ReadonlyArray<string> = [
   "01-distance-servo.txt",
   "02-pet-bowl.txt",
@@ -123,6 +145,29 @@ const PROMPT_FILES: ReadonlyArray<string> = [
   "04-doorbell-style.txt",
   "05-misspelled.txt",
 ];
+
+// ---------------------------------------------------------------------------
+// CLI flag parsing (tiny — argparse would be overkill for 2 flags)
+// ---------------------------------------------------------------------------
+
+export interface SmokeFlags {
+  /** `--json`: emit JSON output to stdout instead of the ASCII table. */
+  json: boolean;
+  /**
+   * `--dry-run`: skip the actual classify/generate/compile calls and
+   * stub a happy-path outcome per prompt. Useful for testing
+   * pre-flight, formatting, and exit-code wiring without spending API
+   * credits.
+   */
+  dryRun: boolean;
+}
+
+export function parseFlags(argv: ReadonlyArray<string>): SmokeFlags {
+  return {
+    json: argv.includes("--json"),
+    dryRun: argv.includes("--dry-run"),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Outcome discriminated union (local to the script — Unit 9 has its own)
@@ -502,10 +547,17 @@ export interface SmokeDeps {
   stderr: (line: string) => void;
   /** Run-id generator (deterministic in tests). */
   generateRunId: () => string;
+  /** Optional flags. Defaults: { json: false, dryRun: false }. */
+  flags?: SmokeFlags;
 }
 
 export interface SmokeOutput {
-  /** Exit code: 0 if ≥3/5 OK rows, 1 otherwise. */
+  /**
+   * Exit code:
+   *   0 — ≥3/5 OK rows passed
+   *   1 — pre-flight failed; the per-prompt loop never started
+   *   2 — run completed but <3/5 OK rows
+   */
   exitCode: number;
   /** Rows produced (empty if pre-flight failed). */
   rows: ReadonlyArray<SmokeRow>;
@@ -514,22 +566,49 @@ export interface SmokeOutput {
 }
 
 /**
+ * Canonical happy-path SmokeOutcome for `--dry-run`. Every prompt
+ * produces this without invoking classify/generate/compile, which
+ * lets agents (and humans) test pre-flight + formatting + exit-code
+ * wiring without burning ~$0.27 of API credit.
+ */
+function dryRunHappyOutcome(): SmokeOutcome {
+  return {
+    kind: "OK",
+    hex_size_bytes: 0,
+    cache_hit: false,
+    latency_ms: 0,
+  };
+}
+
+/**
  * Run the smoke script with injected deps. The CLI entrypoint at
  * `if (import.meta.main)` calls this with `defaultSmokeDeps()`.
+ *
+ * Stream discipline: stdout = payload (table or JSON + hash). Stderr =
+ * progress lines, pre-flight errors, the trailing `TRACE_PATH=<path>`
+ * marker, and any trace-write failure note. Agents that want a
+ * one-shot extraction grep stderr for `^TRACE_PATH=`.
  */
 export async function runSmoke(deps: SmokeDeps): Promise<SmokeOutput> {
-  // ---- Pre-flight 1: Compile API health ------------------------------
-  const health = await deps.healthCheck();
-  if (!health.ok) {
-    deps.stderr(`${health.message ?? "Compile API unreachable"}\n`);
-    return { exitCode: 1, rows: [], hash: "" };
-  }
+  const flags: SmokeFlags = deps.flags ?? { json: false, dryRun: false };
 
-  // ---- Pre-flight 2: ANTHROPIC_API_KEY -------------------------------
-  const keyCheck = deps.apiKeyCheck();
-  if (!keyCheck.ok) {
-    deps.stderr(`${keyCheck.message ?? "ANTHROPIC_API_KEY missing"}\n`);
-    return { exitCode: 1, rows: [], hash: "" };
+  // `--dry-run` skips both pre-flight checks AND the per-prompt API calls
+  // — its purpose is to exercise the output formatting + exit-code wiring
+  // on a workstation without `compile:up` running and without an API key.
+  if (!flags.dryRun) {
+    // ---- Pre-flight 1: Compile API health ----------------------------
+    const health = await deps.healthCheck();
+    if (!health.ok) {
+      deps.stderr(`${health.message ?? "Compile API unreachable"}\n`);
+      return { exitCode: EXIT_PREFLIGHT_FAILED, rows: [], hash: "" };
+    }
+
+    // ---- Pre-flight 2: ANTHROPIC_API_KEY -----------------------------
+    const keyCheck = deps.apiKeyCheck();
+    if (!keyCheck.ok) {
+      deps.stderr(`${keyCheck.message ?? "ANTHROPIC_API_KEY missing"}\n`);
+      return { exitCode: EXIT_PREFLIGHT_FAILED, rows: [], hash: "" };
+    }
   }
 
   // ---- Sequential per-prompt loop (NO Promise.all) -------------------
@@ -539,9 +618,12 @@ export async function runSmoke(deps: SmokeDeps): Promise<SmokeOutput> {
     const promptIndex = i + 1;
     const startedAt = Date.now();
     const promptText = (await deps.readPromptFile(filename)).trim();
-    deps.stdout(`[smoke] prompt ${promptIndex}/${PROMPT_FILES.length}: ${filename}\n`);
+    // Progress lines go to STDERR — stdout stays the structured payload.
+    deps.stderr(`[smoke] prompt ${promptIndex}/${PROMPT_FILES.length}: ${filename}\n`);
 
-    const outcome = await runPromptPipeline(promptText, deps.pipelineDeps);
+    const outcome = flags.dryRun
+      ? dryRunHappyOutcome()
+      : await runPromptPipeline(promptText, deps.pipelineDeps);
     const elapsed = Date.now() - startedAt;
 
     rows.push({
@@ -557,13 +639,21 @@ export async function runSmoke(deps: SmokeDeps): Promise<SmokeOutput> {
   const tableText = renderTable(rows);
   const hash = computeSmokeHash(rows);
   const okCount = rows.filter((r) => r.outcome.kind === "OK").length;
-  const exitCode = okCount >= PASS_THRESHOLD ? 0 : 1;
+  const exitCode = okCount >= PASS_THRESHOLD ? EXIT_OK : EXIT_BELOW_THRESHOLD;
 
-  const summary =
-    `\n${tableText}\n\n` +
-    `OK rows: ${okCount}/${rows.length} (threshold: ≥${PASS_THRESHOLD})\n` +
-    `smoke run hash: ${hash}\n`;
-  deps.stdout(summary);
+  if (flags.json) {
+    // JSON-mode output: a single self-describing payload to stdout.
+    // The trailing newline keeps line-buffered consumers happy.
+    deps.stdout(
+      `${JSON.stringify({ rows, hash, ok_rows: okCount, threshold: PASS_THRESHOLD, exit_code: exitCode })}\n`,
+    );
+  } else {
+    const summary =
+      `\n${tableText}\n\n` +
+      `OK rows: ${okCount}/${rows.length} (threshold: ≥${PASS_THRESHOLD})\n` +
+      `smoke run hash: ${hash}\n`;
+    deps.stdout(summary);
+  }
 
   const runId = deps.generateRunId();
   const traceFilename = `${TRACES_DIR}/smoke-${runId}.txt`;
@@ -577,8 +667,19 @@ export async function runSmoke(deps: SmokeDeps): Promise<SmokeOutput> {
       .map((r) => `prompt ${r.prompt_index} (${r.prompt_file}): ${JSON.stringify(r.outcome)}`)
       .join("\n")}\n`;
 
-  await deps.writeTraceFile(traceFilename, traceBody);
-  deps.stdout(`[smoke] trace written to ${traceFilename}\n`);
+  // Trace-write failure should NOT crash the run — the smoke result is
+  // already in `rows`/`hash` and the JSON/table payload is on stdout.
+  // Log the failure on stderr and continue to the TRACE_PATH marker.
+  try {
+    await deps.writeTraceFile(traceFilename, traceBody);
+    // Single deterministic line for agents: stable prefix + path.
+    deps.stderr(`TRACE_PATH=${traceFilename}\n`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    deps.stderr(
+      `[smoke] WARN: trace write to ${traceFilename} failed: ${msg}\n`,
+    );
+  }
 
   return { exitCode, rows, hash };
 }
@@ -592,7 +693,7 @@ export async function runSmoke(deps: SmokeDeps): Promise<SmokeOutput> {
  * checks, calls the real LLM and gate functions. Test code constructs
  * deps inline instead.
  */
-export function defaultSmokeDeps(): SmokeDeps {
+export function defaultSmokeDeps(flags?: SmokeFlags): SmokeDeps {
   return {
     readPromptFile: async (filename: string): Promise<string> => {
       const path = pathResolve(SMOKE_PROMPTS_DIR, filename);
@@ -615,6 +716,7 @@ export function defaultSmokeDeps(): SmokeDeps {
     stdout: (line: string) => process.stdout.write(line),
     stderr: (line: string) => process.stderr.write(line),
     generateRunId,
+    flags,
   };
 }
 
@@ -623,6 +725,7 @@ export function defaultSmokeDeps(): SmokeDeps {
 // ---------------------------------------------------------------------------
 
 if (import.meta.main) {
-  const result = await runSmoke(defaultSmokeDeps());
+  const flags = parseFlags(process.argv.slice(2));
+  const result = await runSmoke(defaultSmokeDeps(flags));
   process.exit(result.exitCode);
 }

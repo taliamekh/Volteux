@@ -584,8 +584,8 @@ describe("runSmoke: end-to-end with mocked deps (all OK)", () => {
   });
 });
 
-describe("runSmoke: <3/5 OK rows → exitCode 1", () => {
-  test("3 SCHEMA_FAILED + 2 OK = 2 OK rows → exitCode 1", async () => {
+describe("runSmoke: <3/5 OK rows → exitCode 2 (below threshold; pre-flight passed)", () => {
+  test("3 SCHEMA_FAILED + 2 OK = 2 OK rows → exitCode 2", async () => {
     let invocation = 0;
     const generateImpl = (): GenerateResult => {
       invocation += 1;
@@ -614,7 +614,10 @@ describe("runSmoke: <3/5 OK rows → exitCode 1", () => {
     }) as RunPromptDeps["runSchemaGate"];
 
     const result = await runSmoke(failingSchemaDeps.deps);
-    expect(result.exitCode).toBe(1);
+    // exitCode 2 — pre-flight passed but the pipeline produced too few OK rows.
+    // Distinct from exitCode 1 (pre-flight failure) so agents can branch
+    // without parsing logs.
+    expect(result.exitCode).toBe(2);
     expect(result.rows.length).toBe(5);
     const okRows = result.rows.filter((r) => r.outcome.kind === "OK").length;
     expect(okRows).toBe(2);

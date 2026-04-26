@@ -2,7 +2,8 @@
 /**
  * One-off measurement script. NOT part of `bun test`.
  *
- *   bun run measure:prompt-tokens
+ *   bun run measure:prompt-tokens          # prose-formatted output (default)
+ *   bun run measure:prompt-tokens --json   # JSON output to stdout
  *
  * Constructs the production deps via `defaultGenerateDeps()`, makes a
  * single Anthropic call with a trivial user prompt, and prints
@@ -35,13 +36,17 @@ import { defaultGenerateDeps, generate } from "../pipeline/llm/generate.ts";
 const MEASURE_PROMPT = "a robot that waves when something gets close";
 
 async function main(): Promise<void> {
+  const jsonMode = process.argv.slice(2).includes("--json");
+
   // Touch defaultGenerateDeps once so any config error (missing env, missing
   // prompt source) surfaces with the right error message before the call.
   await defaultGenerateDeps();
 
-  process.stdout.write(
-    `[measure-prompt-tokens] sending one Sonnet call with prompt: ${JSON.stringify(MEASURE_PROMPT)}\n`,
-  );
+  if (!jsonMode) {
+    process.stdout.write(
+      `[measure-prompt-tokens] sending one Sonnet call with prompt: ${JSON.stringify(MEASURE_PROMPT)}\n`,
+    );
+  }
 
   const result = await generate(MEASURE_PROMPT);
 
@@ -53,6 +58,22 @@ async function main(): Promise<void> {
   }
 
   const u = result.usage;
+  const cacheEngaged =
+    u.cache_creation_input_tokens > 0 || u.cache_read_input_tokens > 0;
+
+  if (jsonMode) {
+    process.stdout.write(
+      `${JSON.stringify({
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cache_creation_input_tokens: u.cache_creation_input_tokens,
+        cache_read_input_tokens: u.cache_read_input_tokens,
+        cache_engaged: cacheEngaged,
+      })}\n`,
+    );
+    return;
+  }
+
   process.stdout.write(
     [
       "[measure-prompt-tokens] usage:",
@@ -62,7 +83,7 @@ async function main(): Promise<void> {
       `  cache_read_input_tokens       = ${u.cache_read_input_tokens}`,
       "",
       `  Sonnet 4.6 cache minimum: 2048 tokens.`,
-      `  cache engaged: ${u.cache_creation_input_tokens > 0 || u.cache_read_input_tokens > 0 ? "yes" : "no"}`,
+      `  cache engaged: ${cacheEngaged ? "yes" : "no"}`,
       "",
     ].join("\n"),
   );
