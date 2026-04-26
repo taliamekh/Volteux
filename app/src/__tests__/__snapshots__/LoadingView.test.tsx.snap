@@ -1,0 +1,111 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`LoadingView > renders the prompt + first step active 1`] = `
+<DocumentFragment>
+  <div
+    class="progress-overlay"
+  >
+    <div
+      class="progress-prompt"
+    >
+      a robot arm that waves
+    </div>
+    <div
+      class="progress-sub"
+    >
+      This usually takes about 8 seconds.
+    </div>
+    <div
+      class="stepper"
+    >
+      <div
+        class="step active"
+      >
+        <div
+          class="step-icon"
+        >
+          📖
+        </div>
+        <div
+          class="step-label"
+        >
+          Reading your idea
+        </div>
+      </div>
+      <div
+        class="step-connector "
+      />
+      <div
+        class="step "
+      >
+        <div
+          class="step-icon"
+        >
+          🔍
+        </div>
+        <div
+          class="step-label"
+        >
+          Picking the parts
+        </div>
+      </div>
+      <div
+        class="step-connector "
+      />
+      <div
+        class="step "
+      >
+        <div
+          class="step-icon"
+        >
+          ✎
+        </div>
+        <div
+          class="step-label"
+        >
+          Writing your sketch
+        </div>
+      </div>
+      <div
+        class="step-connector "
+      />
+      <div
+        class="step "
+      >
+        <div
+          class="step-icon"
+        >
+          ⚙
+        </div>
+        <div
+          class="step-label"
+        >
+          Compiling for Arduino
+        </div>
+      </div>
+      <div
+        class="step-connector "
+      />
+      <div
+        class="step "
+      >
+        <div
+          class="step-icon"
+        >
+          ⎘
+        </div>
+        <div
+          class="step-label"
+        >
+          Checking the wiring
+        </div>
+      </div>
+    </div>
+    <div
+      class="progress-status"
+    >
+      Reading your idea…
+    </div>
+  </div>
+</DocumentFragment>
+`;
