@@ -1,0 +1,717 @@
+/**
+ * Unit + gated-integration tests for `pipeline/llm/generate.ts`.
+ *
+ * Coverage:
+ *   - Happy paths (mocked): single-call success; auto-repair retry success.
+ *   - Discriminated failure kinds (mocked): schema-failed, truncated,
+ *     transport, sdk-error, abort.
+ *   - Input-validation guards (synchronous throws): empty + oversize prompts.
+ *   - DI overrides: model name passed through buildGenerator(deps) reaches
+ *     the SDK call.
+ *   - Cache discipline (assertion): the auto-repair retry sends the SAME
+ *     system blocks as the initial call AND appends a fresh user turn
+ *     LAST (no assistant prefill).
+ *   - Exhaustiveness guard: see `tests/llm/generate-exhaustiveness.test.ts`
+ *     (sibling file with `// @ts-expect-error` on a switch missing a kind).
+ *
+ * Gated integration tests run only when `ANTHROPIC_API_KEY` is set in
+ * the environment. They:
+ *   - Verify a real Sonnet 4.6 call returns a schema-valid
+ *     VolteuxProjectDocument that ALSO passes the schema, cross-consistency,
+ *     library allowlist, AND archetype-1 rules gates (red bucket empty).
+ *   - Verify the prompt cache engages (cache_read_input_tokens > 0 on a
+ *     repeat call) when the system+schema primer is ≥2048 tokens. If the
+ *     measurement script previously found <2048 tokens, this assertion
+ *     skips with a clear log line and the no-cache ADR comment in the
+ *     prompt header is the audit trail.
+ *
+ * **Prefill probe outcome (from first integration run on 2026-04-26):**
+ *
+ *     Sonnet 4.6 REJECTED the assistant-suffixed message with HTTP 400
+ *     `invalid_request_error: This model does not support assistant
+ *     message prefill. The conversation must end with a user message.`
+ *
+ *     Verified `request_id=req_011CaRtkRTuw6q9ZXycD6Zi5` (logged on
+ *     stdout from the integration test "prefill probe — deliberately
+ *     constructs an assistant-suffixed message").
+ *
+ *     This is what the multi-turn shape we ship is designed for: the
+ *     auto-repair retry sends `system → user(prompt) → assistant(prior)
+ *     → user(repair)` — the LAST turn is a USER turn, NOT an
+ *     assistant-suffixed prefill. The retry survives Sonnet 4.6's
+ *     rejection policy by construction.
+ *
+ *     If a future model relaxes this rule, the shape continues to work
+ *     (assistant-prefill is strictly more constrained than
+ *     ending-with-user, which we already do). Re-run the probe when
+ *     migrating to a new model version to update this header.
+ *
+ * **Cost note.** Integration tests fire ~6-8 real Sonnet calls. Expect
+ * ~$0.50-0.80 per full integration run. Run with `ANTHROPIC_API_KEY` set
+ * only when the unit tests pass first.
+ */
+
+import { describe, expect, test } from "bun:test";
+import type { ZodIssue } from "zod";
+import {
+  buildGenerator,
+  generate,
+  type GenerateDeps,
+  type GenerateResult,
+} from "../../pipeline/llm/generate.ts";
+import { runSchemaGate } from "../../pipeline/gates/schema.ts";
+import { runCrossConsistencyGate } from "../../pipeline/gates/cross-consistency.ts";
+import { runRules } from "../../pipeline/rules/index.ts";
+import { VolteuxProjectDocumentSchema } from "../../schemas/document.zod.ts";
+import {
+  APIConnectionError,
+  APIError,
+  APIUserAbortError,
+  AnthropicError,
+} from "@anthropic-ai/sdk";
+
+// ---------------------------------------------------------------------------
+// Fixture: a known-good VolteuxProjectDocument the mock SDK returns.
+// We import the canonical fixture so happy-path tests use shape that's
+// already validated against the schema.
+// ---------------------------------------------------------------------------
+
+const CANONICAL_FIXTURE = await Bun.file(
+  "fixtures/uno-ultrasonic-servo.json",
+).json();
+
+// Safe-parse to give the test a properly-typed VolteuxProjectDocument value.
+const parsedFixture = VolteuxProjectDocumentSchema.parse(CANONICAL_FIXTURE);
+
+// ---------------------------------------------------------------------------
+// Test SDK builder — minimal mock matching the parts generate.ts uses.
+// ---------------------------------------------------------------------------
+
+interface MockUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number | null;
+  cache_read_input_tokens: number | null;
+}
+
+interface MockMessageResponse {
+  // The SDK calls outputFormat.parse(textBlock.text); we simulate that
+  // by exposing `parsed_output` directly and `content` for completeness.
+  parsed_output: unknown | null;
+  stop_reason: "end_turn" | "max_tokens" | "stop_sequence" | "tool_use" | null;
+  usage: MockUsage;
+  content: ReadonlyArray<{ type: "text"; text: string }>;
+}
+
+type MockHandler = (params: {
+  model: string;
+  max_tokens: number;
+  system: unknown;
+  messages: ReadonlyArray<{ role: "user" | "assistant"; content: unknown }>;
+  output_config?: { format?: unknown };
+}) =>
+  | MockMessageResponse
+  | Promise<MockMessageResponse>
+  | Error
+  | Promise<never>;
+
+interface MockClientCallLog {
+  model: string;
+  max_tokens: number;
+  system: unknown;
+  messages: ReadonlyArray<{ role: "user" | "assistant"; content: unknown }>;
+  output_config?: { format?: unknown };
+}
+
+interface MockSdk {
+  messages: {
+    parse: (params: unknown, opts?: { signal?: AbortSignal }) => Promise<unknown>;
+  };
+  __calls: MockClientCallLog[];
+}
+
+/**
+ * Build a mock Anthropic-shaped client. Each call invokes the next
+ * handler in the queue. If a handler returns a value with
+ * `parsed_output`, that's a success path; if it throws, that's a
+ * failure path.
+ *
+ * The mock simulates the SDK's structured-output `parse` step: when
+ * the handler returns `{ ...response, parsed_output: rawObj }`, we run
+ * the deps.outputFormat.parse over a stringified content block and
+ * propagate the AnthropicError if it throws (matches real SDK behavior).
+ */
+function makeMockSdk(handlers: MockHandler[]): MockSdk {
+  const queue = [...handlers];
+  const calls: MockClientCallLog[] = [];
+  return {
+    messages: {
+      parse: async (params: unknown, opts?: { signal?: AbortSignal }) => {
+        const p = params as MockClientCallLog;
+        calls.push(p);
+        const handler = queue.shift();
+        if (handler === undefined) {
+          throw new Error("mock SDK: no handler queued for this call");
+        }
+        // Simulate caller-cancellation BEFORE the handler runs.
+        if (opts?.signal?.aborted === true) {
+          throw new APIUserAbortError({ message: "aborted" });
+        }
+        const result = await handler(p);
+        if (result instanceof Error) throw result;
+        // Simulate the SDK's structured-output flow: if the response
+        // has `parsed_output: null` AND `output_config.format.parse`
+        // exists, we don't run it — but if `parsed_output` is a parsed
+        // object, we return it as-is (the real SDK ran .parse()
+        // successfully).
+        return result;
+      },
+    },
+    __calls: calls,
+  };
+}
+
+function makeDeps(handlers: MockHandler[], overrides: Partial<GenerateDeps> = {}): {
+  deps: GenerateDeps;
+  sdk: MockSdk;
+} {
+  const sdk = makeMockSdk(handlers);
+  const deps: GenerateDeps = {
+    client: sdk as unknown as GenerateDeps["client"],
+    systemPromptSource: "[mock system prompt]",
+    schemaPrimer: "[mock schema primer]",
+    model: "claude-sonnet-4-6",
+    maxTokens: 16000,
+    ...overrides,
+  };
+  return { deps, sdk };
+}
+
+// ---------------------------------------------------------------------------
+// Happy path: single call success
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — happy path (single call)", () => {
+  test("returns ok with parsed doc + usage after exactly 1 call", async () => {
+    const { deps, sdk } = makeDeps([
+      () => ({
+        parsed_output: parsedFixture,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 2500,
+          output_tokens: 800,
+          cache_creation_input_tokens: 2500,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: JSON.stringify(parsedFixture) }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.doc.archetype_id).toBe("uno-ultrasonic-servo");
+      expect(result.doc.sketch.libraries).toEqual(["Servo"]);
+      expect(result.usage.input_tokens).toBe(2500);
+      expect(result.usage.cache_creation_input_tokens).toBe(2500);
+    }
+    expect(sdk.__calls.length).toBe(1);
+  });
+
+  test("system blocks are an array with cache_control on the LAST block", async () => {
+    const { deps, sdk } = makeDeps([
+      () => ({
+        parsed_output: parsedFixture,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 2500,
+          output_tokens: 800,
+          cache_creation_input_tokens: 2500,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: JSON.stringify(parsedFixture) }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    await generator("a robot that waves when something gets close");
+    const call = sdk.__calls[0];
+    expect(call).toBeDefined();
+    const system = call?.system as Array<{ type: string; cache_control?: unknown }>;
+    expect(Array.isArray(system)).toBe(true);
+    expect(system.length).toBeGreaterThanOrEqual(2);
+    const last = system[system.length - 1];
+    expect(last?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    // Earlier blocks must NOT carry cache_control — only the LAST one.
+    for (let i = 0; i < system.length - 1; i++) {
+      const b = system[i];
+      expect(b?.cache_control).toBeUndefined();
+    }
+  });
+
+  test("fewshot block is appended when deps.fewshotSource is set, and gets the cache_control marker", async () => {
+    const { deps, sdk } = makeDeps(
+      [
+        () => ({
+          parsed_output: parsedFixture,
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 4000,
+            output_tokens: 800,
+            cache_creation_input_tokens: 4000,
+            cache_read_input_tokens: 0,
+          },
+          content: [{ type: "text", text: JSON.stringify(parsedFixture) }],
+        }),
+      ],
+      { fewshotSource: "[mock fewshot]" },
+    );
+    const generator = buildGenerator(deps);
+    await generator("a robot that waves when something gets close");
+    const call = sdk.__calls[0];
+    const system = call?.system as Array<{ type: string; text: string; cache_control?: unknown }>;
+    expect(system.length).toBe(3);
+    expect(system[2]?.text).toBe("[mock fewshot]");
+    expect(system[2]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    // The schemaPrimer (block 1) and the systemPromptSource (block 0)
+    // are NOT marked when fewshot exists.
+    expect(system[0]?.cache_control).toBeUndefined();
+    expect(system[1]?.cache_control).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-repair retry: success
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — auto-repair retry (success)", () => {
+  test("first call throws zod-parse, second call returns parsed doc; exactly 2 calls", async () => {
+    // Construct the AnthropicError shape the real SDK throws when our
+    // outputFormat.parse() throws. We mirror the inner-Error-with-cause
+    // shape so extractZodIssues can read the issues.
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["sketch", "main_ino"],
+        message: "Expected string, received number",
+        // expected/received fields are required on invalid_type issues but
+        // the impl only reads `path` and `message`.
+        expected: "string",
+        received: "number",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed: 1 issue(s)") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const sdkThrow = new AnthropicError(
+      `Failed to parse structured output: ${inner.message}\nValidation issues:\n  - sketch.main_ino: Expected string, received number`,
+    ) as AnthropicError & { cause?: unknown };
+    sdkThrow.cause = inner;
+
+    const { deps, sdk } = makeDeps([
+      () => sdkThrow,
+      () => ({
+        parsed_output: parsedFixture,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 800,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 2500,
+        },
+        content: [{ type: "text", text: JSON.stringify(parsedFixture) }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.doc.archetype_id).toBe("uno-ultrasonic-servo");
+      // Cache-discipline assertion: on the retry call, cache_read > 0 AND
+      // cache_creation === 0 — the prefix was hit, no second creation.
+      expect(result.usage.cache_read_input_tokens).toBe(2500);
+      expect(result.usage.cache_creation_input_tokens).toBe(0);
+    }
+    expect(sdk.__calls.length).toBe(2);
+  });
+
+  test("retry message order: system → user(prompt) → assistant(prior) → user(errors); LAST turn is USER, not assistant prefill", async () => {
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["board", "fqbn"],
+        message: "Required",
+        expected: "string",
+        received: "undefined",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed: 1 issue(s)") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const sdkThrow = new AnthropicError(
+      `Failed to parse structured output: ${inner.message}`,
+    ) as AnthropicError & { cause?: unknown };
+    sdkThrow.cause = inner;
+
+    const { deps, sdk } = makeDeps([
+      () => sdkThrow,
+      () => ({
+        parsed_output: parsedFixture,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 800,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 2500,
+        },
+        content: [{ type: "text", text: JSON.stringify(parsedFixture) }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    await generator("a robot that waves when something gets close");
+
+    const retryCall = sdk.__calls[1];
+    expect(retryCall).toBeDefined();
+    const messages = retryCall?.messages as ReadonlyArray<{
+      role: "user" | "assistant";
+      content: string;
+    }>;
+    expect(messages.length).toBe(3);
+    expect(messages[0]?.role).toBe("user");
+    expect(messages[0]?.content).toBe(
+      "a robot that waves when something gets close",
+    );
+    expect(messages[1]?.role).toBe("assistant");
+    expect(messages[2]?.role).toBe("user");
+    // The last turn must contain the schema-error feedback.
+    expect(messages[2]?.content).toContain("schema validation");
+
+    // System blocks are UNCHANGED across attempts — the cached prefix
+    // stays byte-identical so cache_read fires.
+    const initialSystem = JSON.stringify(sdk.__calls[0]?.system);
+    const retrySystem = JSON.stringify(retryCall?.system);
+    expect(initialSystem).toBe(retrySystem);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Discriminated failure kinds
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — schema-failed (both attempts fail Zod parse)", () => {
+  test("returns kind:'schema-failed' with ZodIssues after exactly 2 calls", async () => {
+    const fakeIssues: ZodIssue[] = [
+      {
+        code: "invalid_type",
+        path: ["board"],
+        message: "Required",
+        expected: "object",
+        received: "undefined",
+      } as ZodIssue,
+    ];
+    const inner = new Error("Zod validation failed") as Error & {
+      cause?: unknown;
+    };
+    inner.cause = { issues: fakeIssues };
+    const buildThrow = (): AnthropicError => {
+      const e = new AnthropicError(
+        `Failed to parse structured output: Zod validation failed`,
+      ) as AnthropicError & { cause?: unknown };
+      e.cause = inner;
+      return e;
+    };
+
+    const { deps, sdk } = makeDeps([() => buildThrow(), () => buildThrow()]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("schema-failed");
+      expect(result.severity).toBe("red");
+      expect(result.errors.length).toBeGreaterThan(0);
+    }
+    // No infinite retry — exactly 2 calls.
+    expect(sdk.__calls.length).toBe(2);
+  });
+});
+
+describe("buildGenerator — truncated", () => {
+  test("first call returns stop_reason='max_tokens' with parsed_output:null → kind:'truncated' after exactly 1 call (no retry)", async () => {
+    const { deps, sdk } = makeDeps([
+      () => ({
+        parsed_output: null,
+        stop_reason: "max_tokens",
+        usage: {
+          input_tokens: 2500,
+          output_tokens: 16000,
+          cache_creation_input_tokens: 2500,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "{partial json without closing brace" }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("truncated");
+      expect(result.severity).toBe("red");
+    }
+    // Truncation does NOT trigger an auto-repair retry — same prompt
+    // would just truncate again at the same boundary.
+    expect(sdk.__calls.length).toBe(1);
+  });
+});
+
+describe("buildGenerator — transport (network throw)", () => {
+  test("APIConnectionError → kind:'transport' (no retry)", async () => {
+    const connErr = new APIConnectionError({
+      message: "connect ECONNREFUSED",
+      cause: new Error("ECONNREFUSED 127.0.0.1:443"),
+    });
+    const { deps, sdk } = makeDeps([() => connErr]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("transport");
+      expect(result.severity).toBe("red");
+    }
+    // Transport errors are NOT auto-repaired — orchestrator territory.
+    expect(sdk.__calls.length).toBe(1);
+  });
+
+  test("plain TypeError('fetch failed') → kind:'transport'", async () => {
+    const err = new TypeError("fetch failed");
+    const { deps } = makeDeps([() => err]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.kind).toBe("transport");
+  });
+});
+
+describe("buildGenerator — sdk-error (5xx / rate-limit retried-out)", () => {
+  test("APIError(529 Overloaded) → kind:'sdk-error' (no retry)", async () => {
+    // Construct a stand-in for an APIError surfaced after the SDK's
+    // internal retry loop gave up.
+    class FakeAPIError extends APIError<529, undefined, undefined> {
+      constructor() {
+        super(
+          529 as const,
+          undefined,
+          "529 Overloaded",
+          undefined,
+        );
+      }
+    }
+    const err = new FakeAPIError();
+    const { deps, sdk } = makeDeps([() => err]);
+    const generator = buildGenerator(deps);
+    const result = await generator("a robot that waves when something gets close");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("sdk-error");
+      expect(result.severity).toBe("red");
+    }
+    expect(sdk.__calls.length).toBe(1);
+  });
+});
+
+describe("buildGenerator — abort", () => {
+  test("pre-fired AbortSignal → kind:'abort' (no retry)", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { deps, sdk } = makeDeps([
+      () => ({
+        parsed_output: parsedFixture,
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "{}" }],
+      }),
+    ]);
+    const generator = buildGenerator(deps);
+    const result = await generator(
+      "a robot that waves when something gets close",
+      { signal: controller.signal },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.kind).toBe("abort");
+      expect(result.severity).toBe("red");
+    }
+    // The mock raises APIUserAbortError before the handler runs, so the
+    // call IS logged but no real model invocation happened.
+    expect(sdk.__calls.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Input-validation guards (synchronous throws; no API call made)
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — input-validation guards", () => {
+  test("empty prompt throws synchronously; zero API calls", async () => {
+    const { deps, sdk } = makeDeps([]);
+    const generator = buildGenerator(deps);
+    await expect(generator("")).rejects.toThrow("empty prompt");
+    expect(sdk.__calls.length).toBe(0);
+  });
+
+  test("oversize (>5000 chars) prompt throws synchronously; zero API calls", async () => {
+    const { deps, sdk } = makeDeps([]);
+    const generator = buildGenerator(deps);
+    const big = "x".repeat(5001);
+    await expect(generator(big)).rejects.toThrow("prompt exceeds 5000 chars");
+    expect(sdk.__calls.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DI override: model name passes through
+// ---------------------------------------------------------------------------
+
+describe("buildGenerator — DI override", () => {
+  test("override model name reaches the SDK call (production sees default)", async () => {
+    const { deps, sdk } = makeDeps(
+      [
+        () => ({
+          parsed_output: parsedFixture,
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 800,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+          content: [{ type: "text", text: JSON.stringify(parsedFixture) }],
+        }),
+      ],
+      { model: "claude-sonnet-4-6-future" },
+    );
+    const generator = buildGenerator(deps);
+    await generator("a robot that waves when something gets close");
+    expect(sdk.__calls[0]?.model).toBe("claude-sonnet-4-6-future");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gated integration tests
+// ---------------------------------------------------------------------------
+
+const HAS_API_KEY = (process.env.ANTHROPIC_API_KEY ?? "") !== "";
+
+const integrationDescribe = HAS_API_KEY ? describe : describe.skip;
+
+integrationDescribe(
+  "generate() — integration (requires ANTHROPIC_API_KEY)",
+  () => {
+    test(
+      "produces a doc that passes schema, cross-consistency, AND archetype-1 rules (red bucket empty)",
+      async () => {
+        const result: GenerateResult = await generate(
+          "a robot that waves when something gets close",
+        );
+        expect(result.ok).toBe(true);
+        if (!result.ok) {
+          // Surface the failure directly so the test output is informative.
+          throw new Error(
+            `generate() returned not-ok: kind=${result.kind} message=${result.message} errors=${JSON.stringify(result.errors)}`,
+          );
+        }
+        // Schema gate
+        const sg = runSchemaGate(result.doc);
+        expect(sg.ok).toBe(true);
+        // Cross-consistency gate
+        const xc = runCrossConsistencyGate(result.doc);
+        expect(xc.ok).toBe(true);
+        // Archetype-1 rules — red bucket must be empty
+        const rules = runRules(result.doc);
+        if (rules.red.length > 0) {
+          const red = rules.red.map((a) => `${a.rule.id}: ${a.result.passed ? "" : a.result.message}`);
+          throw new Error(
+            `archetype-1 rules emitted RED: ${red.join("; ")}`,
+          );
+        }
+        expect(result.doc.archetype_id).toBe("uno-ultrasonic-servo");
+      },
+      { timeout: 120_000 },
+    );
+
+    test(
+      "second call within 1h shows cache_read_input_tokens > 0 (cache engaged)",
+      async () => {
+        // First call primes the cache; second call should hit it.
+        // If the system+schema primer is < 2048 tokens this will not
+        // engage and the test logs a clear skip message.
+        const first = await generate(
+          "a robot that waves when something gets close",
+        );
+        if (!first.ok) {
+          throw new Error(
+            `first call failed: kind=${first.kind} message=${first.message}`,
+          );
+        }
+        if (
+          first.usage.cache_creation_input_tokens === 0 &&
+          first.usage.cache_read_input_tokens === 0
+        ) {
+          process.stdout.write(
+            "[generate.test] cache did not engage on first call — system+schema primer likely <2048 tokens. " +
+              "Run `bun run measure:prompt-tokens` and pad with archetype-1-fewshot.md, or document no-cache ADR. Skipping cache-read assertion.\n",
+          );
+          return;
+        }
+        const second = await generate(
+          "a robot that waves when something gets close",
+        );
+        if (!second.ok) {
+          throw new Error(
+            `second call failed: kind=${second.kind} message=${second.message}`,
+          );
+        }
+        expect(second.usage.cache_read_input_tokens).toBeGreaterThan(0);
+      },
+      { timeout: 240_000 },
+    );
+
+    test(
+      "prefill probe — deliberately constructs an assistant-suffixed message and records the API's response",
+      async () => {
+        // We probe via a low-level Anthropic client directly to keep the
+        // generate() function shape pure. The probe outcome is logged
+        // and written into this file's header on first run; future
+        // contributors see the latest observed behavior.
+        const Anthropic = (await import("@anthropic-ai/sdk")).default;
+        const client = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+        });
+        let outcome: string;
+        try {
+          const response = await client.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 200,
+            messages: [
+              { role: "user", content: "Reply with only the word 'OK'." },
+              { role: "assistant", content: "OK" },
+            ],
+          });
+          outcome = `Sonnet 4.6 ACCEPTED an assistant-suffixed message; stop_reason=${response.stop_reason}, response content=${JSON.stringify(response.content).slice(0, 200)}`;
+        } catch (err) {
+          outcome = `Sonnet 4.6 REJECTED the assistant-suffixed message: ${(err as Error).message.slice(0, 300)}`;
+        }
+        process.stdout.write(`[prefill probe] ${outcome}\n`);
+        // Outcome does NOT gate the test — the multi-turn shape we ship
+        // works regardless. We just record it.
+        expect(typeof outcome).toBe("string");
+      },
+      { timeout: 60_000 },
+    );
+  },
+);
