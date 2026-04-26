@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: ok
+expected_archetype: uno-ultrasonic-servo
+---
+I want to measure how close my dog gets to the food bowl

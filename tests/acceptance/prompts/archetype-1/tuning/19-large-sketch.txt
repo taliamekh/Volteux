@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: ok
+expected_archetype: uno-ultrasonic-servo
+---
+build an elaborate distance-driven servo demo with detailed Serial logging at every event, multiple servo positions (0/45/90/135/180), and verbose status messages on every loop iteration

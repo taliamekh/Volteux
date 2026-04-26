@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: out-of-scope
+expected_archetype: null
+---
+play music when motion is detected

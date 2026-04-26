@@ -1,0 +1,6 @@
+---
+holdout: false
+expected_kind: ok
+expected_archetype: uno-ultrasonic-servo
+---
+school project that detects nearby objects and waves a paper sign
