@@ -1,3 +1,14 @@
+// KAI-DONE (Units 3, 4, 5b, 8): Manhattan wire routing (route-wire.ts) replaces
+// Bezier; bus-offset for parallel wires; per-component drag with snap-to-hole;
+// expanded view renders WiringSpecTable; selectable wires animate stroke-dashoffset
+// reveal; legend uses JetBrains Mono.
+
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { Project, WireColor } from "../types";
 import { lookupBySku, type ComponentRegistryEntry } from "../../../components/registry";
 import {
@@ -14,6 +25,8 @@ import {
   shiftHole,
   type Hole,
 } from "./breadboard-geometry";
+import { assignBusOffsets, routeWire, type Connection } from "../data/route-wire";
+import WiringSpecTable from "./WiringSpecTable";
 import fixtureJson from "../../../fixtures/uno-ultrasonic-servo.json";
 import {
   VolteuxProjectDocumentSchema,
@@ -191,21 +204,36 @@ function unoPinY(pinLabel: string): number {
 }
 
 /**
+ * Per-component drag offset, applied at render time to the component's
+ * footprint and to its resolved pin coordinates. Render-only state —
+ * the underlying `doc.breadboard_layout` is never mutated (CLAUDE.md
+ * § Schema discipline).
+ */
+interface DragOffset {
+  readonly dx: number;
+  readonly dy: number;
+}
+
+type DragOverrides = ReadonlyMap<string, DragOffset>;
+
+/**
  * Resolve a connection endpoint (component_id + pin_label) to an SVG
- * point. Returns `null` if the endpoint is unknown — caller skips that
- * polyline and warns.
+ * point. Applies any active drag override for non-MCU components.
+ * Returns `null` if the endpoint is unknown — caller skips that wire
+ * and warns.
  */
 function endpointXY(
   doc: VolteuxProjectDocument,
   componentId: string,
   pinLabel: string,
   placed: Map<string, PlacedComponent>,
+  dragOverrides: DragOverrides,
 ): { x: number; y: number } | null {
   const compRef = doc.components.find((c) => c.id === componentId);
   if (!compRef) return null;
   const entry = lookupBySku(compRef.sku);
   if (!entry) return null;
-  // Off-board Uno: emerge from the stub's right edge.
+  // Off-board Uno: emerge from the stub's right edge. Uno is not draggable.
   if (entry.type === "mcu") {
     return { x: UNO_PIN_X, y: unoPinY(pinLabel) };
   }
@@ -213,29 +241,121 @@ function endpointXY(
   if (!placedComp) return null;
   const pin = placedComp.pins.find((p) => p.pinLabel === pinLabel);
   if (!pin) return null;
-  return pin.xy;
+  const override = dragOverrides.get(componentId);
+  if (!override) return pin.xy;
+  return { x: pin.xy.x + override.dx, y: pin.xy.y + override.dy };
 }
 
-/**
- * Quadratic-Bezier path between two points with a slight upward arc for
- * readability. Mirrors the curve style of the previous artistic SVG.
- */
-function curvedPath(
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-): string {
-  const midX = (a.x + b.x) / 2;
-  const midY = (a.y + b.y) / 2;
-  // Lift the control point above the midpoint by 10% of horizontal span,
-  // capped so very short wires don't loop too high.
-  const lift = Math.min(20, Math.abs(b.x - a.x) * 0.1 + 6);
-  const cy = midY - lift;
-  return `M ${a.x} ${a.y} Q ${midX} ${cy} ${b.x} ${b.y}`;
+interface DragState {
+  readonly pointerId: number;
+  readonly componentId: string;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly baseDx: number;
+  readonly baseDy: number;
 }
 
 export default function WiringPanel({ project, expanded, onExpandToggle }: WiringPanelProps) {
   const doc = project.document ?? fixtureDoc;
   const placed = placeOnBoard(doc);
+
+  const [dragOverrides, setDragOverrides] = useState<ReadonlyMap<string, DragOffset>>(
+    () => new Map(),
+  );
+  const dragRef = useRef<DragState | null>(null);
+
+  // Wire reveal animation state. Index of the connection clicked, plus
+  // the resolved total length (queried from the live <path> via
+  // getTotalLength()) and the rendered dashoffset. When the user clicks
+  // a wire, we set length immediately (dashoffset = length, fully hidden)
+  // then on the next frame set dashoffset = 0 to trigger the CSS transition.
+  const [selectedConnection, setSelectedConnection] = useState<number | null>(null);
+  const [revealLength, setRevealLength] = useState<number | null>(null);
+  const [revealOffset, setRevealOffset] = useState<number | null>(null);
+  const pathRefs = useRef<Map<number, SVGPathElement>>(new Map());
+
+  useEffect(() => {
+    if (selectedConnection === null) {
+      setRevealLength(null);
+      setRevealOffset(null);
+      return;
+    }
+    const path = pathRefs.current.get(selectedConnection);
+    if (!path) return;
+    const length = path.getTotalLength();
+    setRevealLength(length);
+    setRevealOffset(length);
+    // Schedule the transition on the next frame so the browser commits
+    // the initial (hidden) state before we change to dashoffset = 0.
+    const raf = window.requestAnimationFrame(() => {
+      setRevealOffset(0);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [selectedConnection]);
+
+  const updateOverride = (componentId: string, next: DragOffset): void => {
+    setDragOverrides((prev) => {
+      const out = new Map(prev);
+      out.set(componentId, next);
+      return out;
+    });
+  };
+
+  const handlePointerDown = (
+    e: ReactPointerEvent<SVGGElement>,
+    componentId: string,
+  ): void => {
+    const base = dragOverrides.get(componentId) ?? { dx: 0, dy: 0 };
+    dragRef.current = {
+      pointerId: e.pointerId,
+      componentId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      baseDx: base.dx,
+      baseDy: base.dy,
+    };
+    // Pointer capture lets us keep receiving move/up events even if the
+    // pointer leaves the <g>'s hitbox mid-drag.
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  };
+
+  const handlePointerMove = (e: ReactPointerEvent<SVGGElement>): void => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    // Screen-pixel delta. The SVG scales via viewBox; for the small drags
+    // typical of bench layout edits this 1:1 mapping is acceptable for v1.5
+    // (see plan §Unit 4 simplification note).
+    const rawDx = drag.baseDx + (e.clientX - drag.startClientX);
+    const rawDy = drag.baseDy + (e.clientY - drag.startClientY);
+    const dx = Math.round(rawDx / COL_SPACING) * COL_SPACING;
+    const dy = Math.round(rawDy / ROW_SPACING) * ROW_SPACING;
+    const current = dragOverrides.get(drag.componentId);
+    if (current && current.dx === dx && current.dy === dy) return;
+    updateOverride(drag.componentId, { dx, dy });
+  };
+
+  const handlePointerEnd = (e: ReactPointerEvent<SVGGElement>): void => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    dragRef.current = null;
+  };
+
+  const isDragging = dragRef.current !== null;
+
+  // Bus-offset assignments are derived once per render from the doc's
+  // connections. `assignBusOffsets` is deterministic, so the same
+  // connection set yields the same slot map each render.
+  const connections: Connection[] = doc.connections.map((c) => ({
+    fromId: c.from.component_id,
+    fromPin: c.from.pin_label,
+    toId: c.to.component_id,
+    toPin: c.to.pin_label,
+  }));
+  const busOffsets = assignBusOffsets(connections);
 
   return (
     <div className={`panel flex-grow wire-panel ${expanded ? "panel-expanded" : ""}`}>
@@ -348,13 +468,30 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
             </text>
           </g>
 
-          {/* Placed components (footprint + pin dots + label) */}
+          {/* Placed components (footprint + pin dots + label). Each
+              component's <g> is draggable; the Uno is rendered as a
+              non-draggable off-board stub above and is not in `placed`. */}
           <g>
             {Array.from(placed.values()).map((pc) => {
               const fill = fillForType(pc.entry);
               const labelFill = componentLabelFill();
+              const override = dragOverrides.get(pc.componentId);
+              const transform = override
+                ? `translate(${override.dx} ${override.dy})`
+                : undefined;
+              const dragging =
+                isDragging && dragRef.current?.componentId === pc.componentId;
+              const cursor = dragging ? "grabbing" : "grab";
               return (
-                <g key={pc.componentId}>
+                <g
+                  key={pc.componentId}
+                  transform={transform}
+                  style={{ cursor, touchAction: "none" }}
+                  onPointerDown={(e) => handlePointerDown(e, pc.componentId)}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerEnd}
+                  onPointerCancel={handlePointerEnd}
+                >
                   <rect
                     x={pc.bbox.x}
                     y={pc.bbox.y}
@@ -392,11 +529,26 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
             })}
           </g>
 
-          {/* Wires */}
-          <g fill="none" strokeWidth="1.4" strokeLinecap="round">
+          {/* Wires — strict Manhattan routing via routeWire(). Bus
+              offsets keep parallel wires from drawing on top of each
+              other. Uno endpoints get an explicit elbow through the
+              left-edge stub before entering the Manhattan body. */}
+          <g fill="none" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
             {doc.connections.map((conn, i) => {
-              const a = endpointXY(doc, conn.from.component_id, conn.from.pin_label, placed);
-              const b = endpointXY(doc, conn.to.component_id, conn.to.pin_label, placed);
+              const a = endpointXY(
+                doc,
+                conn.from.component_id,
+                conn.from.pin_label,
+                placed,
+                dragOverrides,
+              );
+              const b = endpointXY(
+                doc,
+                conn.to.component_id,
+                conn.to.pin_label,
+                placed,
+                dragOverrides,
+              );
               if (!a || !b) {
                 console.warn(
                   `Wiring: skipping connection — unknown component '${
@@ -408,30 +560,61 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
               const stroke = conn.wire_color
                 ? (HOLE_WIRE_COLORS[conn.wire_color] ?? UNKNOWN_WIRE)
                 : UNKNOWN_WIRE;
-              // For Uno endpoints: route via the left-edge stub for cleaner lines.
+
+              const key: Connection = {
+                fromId: conn.from.component_id,
+                fromPin: conn.from.pin_label,
+                toId: conn.to.component_id,
+                toPin: conn.to.pin_label,
+              };
+              const busOffset =
+                busOffsets.get(
+                  `${key.fromId} ${key.fromPin} ${key.toId} ${key.toPin}`,
+                ) ?? 0;
+
               const aIsUno = a.x === UNO_PIN_X;
               const bIsUno = b.x === UNO_PIN_X;
+
+              let d: string;
               if (aIsUno || bIsUno) {
-                const stubX = UNO_LEFT_EDGE_STUB_X;
-                const stub = aIsUno
-                  ? { x: stubX, y: a.y }
-                  : { x: stubX, y: b.y };
-                const start = aIsUno ? a : b;
-                const end = aIsUno ? b : a;
-                const points = `${start.x},${start.y} ${stub.x},${stub.y} ${end.x},${end.y}`;
-                return (
-                  <polyline
-                    key={i}
-                    points={points}
-                    stroke={stroke}
-                  />
-                );
+                // Preserve the off-board elbow: go horizontally from the
+                // Uno's right edge to UNO_LEFT_EDGE_STUB_X at the same Y,
+                // then hand off to the Manhattan router for the rest.
+                const unoEnd = aIsUno ? a : b;
+                const otherEnd = aIsUno ? b : a;
+                const stubStart = { x: UNO_LEFT_EDGE_STUB_X, y: unoEnd.y };
+                const tail = routeWire(stubStart, otherEnd, busOffset);
+                // routeWire output starts with "M sx sy ..."; we already have
+                // an M at the Uno end, so strip the leading "M sx sy " from
+                // the tail and append the rest.
+                const tailRest = tail.startsWith(`M ${stubStart.x} ${stubStart.y}`)
+                  ? tail.slice(`M ${stubStart.x} ${stubStart.y}`.length).trimStart()
+                  : tail;
+                d = `M ${unoEnd.x} ${unoEnd.y} H ${stubStart.x}${tailRest ? " " + tailRest : ""}`;
+              } else {
+                d = routeWire(a, b, busOffset);
               }
+
+              const isSelected = selectedConnection === i;
+              const revealStyle =
+                isSelected && revealLength !== null && revealOffset !== null
+                  ? {
+                      strokeDasharray: revealLength,
+                      strokeDashoffset: revealOffset,
+                      transition: "stroke-dashoffset 500ms ease-out",
+                    }
+                  : undefined;
               return (
                 <path
                   key={i}
-                  d={curvedPath(a, b)}
+                  ref={(el) => {
+                    if (el) pathRefs.current.set(i, el);
+                    else pathRefs.current.delete(i);
+                  }}
+                  d={d}
                   stroke={stroke}
+                  style={{ cursor: "pointer", ...revealStyle }}
+                  onClick={() => setSelectedConnection(i)}
                 />
               );
             })}
@@ -441,7 +624,7 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
           <g
             transform={`translate(${BOARD_LEFT}, 250)`}
             fontSize="8"
-            fontFamily="monospace"
+            fontFamily='"JetBrains Mono", monospace'
             fill={LABEL_FILL}
           >
             {project.wiring.slice(0, 5).map((w, i) => (
@@ -454,6 +637,7 @@ export default function WiringPanel({ project, expanded, onExpandToggle }: Wirin
             ))}
           </g>
         </svg>
+        {expanded && <WiringSpecTable doc={doc} />}
       </div>
     </div>
   );

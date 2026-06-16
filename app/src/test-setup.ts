@@ -61,12 +61,26 @@ vi.mock("@monaco-editor/react", () => ({
 
 // React-Three-Fiber Canvas requires WebGL context; replace with a stub div
 // so child <Html>/<mesh> nodes can mount without crashing.
+// `useThree` / `useFrame` are stubbed because the Unit-8 camera-dolly path
+// (HeroScene's <CameraDolly>) calls them outside of a real R3F context.
 vi.mock("@react-three/fiber", async (importOriginal) => {
   const actual: object = await importOriginal();
   return {
     ...actual,
     Canvas: ({ children }: { children?: React.ReactNode }) =>
       React.createElement("div", { "data-testid": "r3f-canvas" }, children),
+    useThree: () => ({
+      camera: {
+        position: {
+          clone: () => ({ copy: () => ({}), lerp: () => ({}) }),
+          copy: () => ({}),
+          lerpVectors: () => ({}),
+        },
+      },
+    }),
+    useFrame: (_cb: unknown) => {
+      void _cb;
+    },
   };
 });
 

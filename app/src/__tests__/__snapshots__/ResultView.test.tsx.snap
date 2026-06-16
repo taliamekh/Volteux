@@ -28,12 +28,15 @@ exports[`ResultView > renders all panels for the default fixture 1`] = `
             <group
               position="-1.6,0.1,-0.4"
             >
+              <group />
+              <group />
               <div
                 data-testid="drei-html"
               >
                 <button
                   aria-label="Arduino Uno R3"
                   class="hotspot  "
+                  style="cursor: default;"
                   title="Arduino Uno R3"
                   type="button"
                 />
@@ -49,6 +52,7 @@ exports[`ResultView > renders all panels for the default fixture 1`] = `
                 <button
                   aria-label="HC-SR04 Ultrasonic Distance Sensor"
                   class="hotspot pulse "
+                  style="cursor: grab;"
                   title="HC-SR04 Ultrasonic Distance Sensor"
                   type="button"
                 />
@@ -64,6 +68,7 @@ exports[`ResultView > renders all panels for the default fixture 1`] = `
                 <button
                   aria-label="Micro Servo SG90"
                   class="hotspot  "
+                  style="cursor: grab;"
                   title="Micro Servo SG90"
                   type="button"
                 />
@@ -78,6 +83,7 @@ exports[`ResultView > renders all panels for the default fixture 1`] = `
                 <button
                   aria-label="Full Sized Breadboard (830 tie points)"
                   class="hotspot  "
+                  style="cursor: default;"
                   title="Full Sized Breadboard (830 tie points)"
                   type="button"
                 />
@@ -92,11 +98,75 @@ exports[`ResultView > renders all panels for the default fixture 1`] = `
                 <button
                   aria-label="Male/Male Jumper Wires (40 x 6 inch)"
                   class="hotspot  "
+                  style="cursor: default;"
                   title="Male/Male Jumper Wires (40 x 6 inch)"
                   type="button"
                 />
               </div>
             </group>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#C8302C"
+                roughness="0.5"
+              />
+            </mesh>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#1A1814"
+                roughness="0.5"
+              />
+            </mesh>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#D9B43C"
+                roughness="0.5"
+              />
+            </mesh>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#3A6FB8"
+                roughness="0.5"
+              />
+            </mesh>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#C8302C"
+                roughness="0.5"
+              />
+            </mesh>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#1A1814"
+                roughness="0.5"
+              />
+            </mesh>
+            <mesh>
+              <tubegeometry
+                args="[object Object],16,0.018,8,false"
+              />
+              <meshstandardmaterial
+                color="#E26A2C"
+                roughness="0.5"
+              />
+            </mesh>
           </div>
           <div
             class="hero-hint"
@@ -2055,7 +2125,9 @@ void loop() {
               </text>
             </g>
             <g>
-              <g>
+              <g
+                style="cursor: grab;"
+              >
                 <rect
                   fill="#1A4A82"
                   height="16"
@@ -2110,7 +2182,9 @@ void loop() {
                   HC-SR04
                 </text>
               </g>
-              <g>
+              <g
+                style="cursor: grab;"
+              >
                 <rect
                   fill="#3A4255"
                   height="16"
@@ -2161,40 +2235,48 @@ void loop() {
             <g
               fill="none"
               stroke-linecap="round"
+              stroke-linejoin="round"
               stroke-width="1.4"
             >
-              <polyline
-                points="14,64 18,64 191,104"
+              <path
+                d="M 14 64 H 18 H 105 V 104 H 191"
                 stroke="#C8302C"
+                style="cursor: pointer;"
               />
-              <polyline
-                points="14,78.47619047619048 18,78.47619047619048 245,104"
+              <path
+                d="M 14 78.47619047619048 H 18 H 132 V 104 H 245"
                 stroke="#1A1814"
+                style="cursor: pointer;"
               />
-              <polyline
-                points="14,129.14285714285714 18,129.14285714285714 209,104"
+              <path
+                d="M 14 129.14285714285714 H 18 H 114 V 104 H 209"
                 stroke="#D9B43C"
+                style="cursor: pointer;"
               />
-              <polyline
-                points="14,136.38095238095238 18,136.38095238095238 227,104"
+              <path
+                d="M 14 136.38095238095238 H 18 H 123 V 104 H 227"
                 stroke="#3A6FB8"
+                style="cursor: pointer;"
               />
-              <polyline
-                points="14,64 18,64 389,104"
+              <path
+                d="M 14 64 H 18 H 204 V 104 H 389"
                 stroke="#C8302C"
+                style="cursor: pointer;"
               />
-              <polyline
-                points="14,85.71428571428571 18,85.71428571428571 371,104"
+              <path
+                d="M 14 85.71428571428571 H 18 H 195 V 104 H 371"
                 stroke="#1A1814"
+                style="cursor: pointer;"
               />
-              <polyline
-                points="14,143.61904761904762 18,143.61904761904762 407,104"
+              <path
+                d="M 14 143.61904761904762 H 18 H 213 V 104 H 407"
                 stroke="#E26A2C"
+                style="cursor: pointer;"
               />
             </g>
             <g
               fill="#9A938A"
-              font-family="monospace"
+              font-family=""JetBrains Mono", monospace"
               font-size="8"
               transform="translate(20, 250)"
             >
